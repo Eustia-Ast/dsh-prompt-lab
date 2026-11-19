@@ -36,7 +36,7 @@ const missing = required.filter((name) => !names.has(name))
 const forbidden = files
   .map((file) => file.path)
   .filter((name) => name.startsWith('test/') || name.startsWith('scripts/') ||
-    name.startsWith('.github/') || name === 'RELEASE-CHECKLIST.md' || name === 'SECURITY.md')
+    name.startsWith('.github/') || name === 'SECURITY.md')
 
 if (missing.length || forbidden.length) {
   console.error('npm pack content check failed')

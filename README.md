@@ -153,7 +153,6 @@ lib/pending.js        重启锁
 lib/liveness.js       会话状态分类
 lib/diagnostics.js    装配失败归因
 locale/               插件标题/描述
-docs/                 详情页与功能示意图
 ```
 
 ## License

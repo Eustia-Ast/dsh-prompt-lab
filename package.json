@@ -43,7 +43,6 @@
     "lib",
     "cordis.patch.yml",
     "locale",
-    "docs",
     "assets",
     "icon.png",
     "README.md",

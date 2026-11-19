@@ -1,7 +1,6 @@
 {
   "meta": {
     "title": "Prompt Lab",
-    "description": "Open Prompt Lab from the lower-left of a session composer to replace, clear, or insert DeepSeek Harness system-prompt sections, and to append user messages or construct assistant messages. Reusable section templates, presets, automatic backups, and blank-window drafts are included, along with per-session global-tool switches. Only sessions you explicitly enable are affected; no jailbreak text or presets are included.",
-    "detail": "docs/DETAIL.md"
+    "description": "Open Prompt Lab from the lower-left of a session composer to replace, clear, or insert DeepSeek Harness system-prompt sections, and to append user messages or construct assistant messages. Reusable section templates, presets, automatic backups, and blank-window drafts are included, along with per-session global-tool switches. Only sessions you explicitly enable are affected; no jailbreak text or presets are included."
   }
 }
