@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-prompt-lab
+      name: 'dsh-prompt-lab'
+      config: {}

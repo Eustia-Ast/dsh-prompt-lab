@@ -1,0 +1,7 @@
+url: https://github.com/Eustia-Ast/dsh-prompt-lab
+name: Eustia-Ast/dsh-prompt-lab
+category: session
+description:
+  en: 'Per-session system-prompt section editor for DeepSeek Harness: templates, presets, automatic backups, blank-window drafts and per-session global-tool switches, scoped only to sessions the user explicitly enables.'
+  zh: '按会话编辑 DeepSeek Harness 系统提示词分段，带模板、预设、自动备份、空白窗口草稿与按会话的 global 工具开关；只影响用户明确开启的会话。'
+icon: https://raw.githubusercontent.com/Eustia-Ast/dsh-prompt-lab/main/assets/icon-180.png
