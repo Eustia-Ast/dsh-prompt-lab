@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Prompt Lab",
-    "description": "Edit one DeepSeek Harness session's system-prompt sections without replacing the whole prompt. Keep reusable section templates, apply presets, restore automatic backups, prepare changes in a blank window before its first turn, and switch global tools off for that session. Only sessions you explicitly enable are affected.",
+    "description": "Open Prompt Lab from the lower-left of a session composer to replace, clear, or insert DeepSeek Harness system-prompt sections, and to append user messages or construct assistant messages. Reusable section templates, presets, automatic backups, and blank-window drafts are included, along with per-session global-tool switches. Only sessions you explicitly enable are affected; no jailbreak text or presets are included.",
     "detail": "docs/DETAIL.md"
   }
 }

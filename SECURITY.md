@@ -2,7 +2,7 @@
 
 ## 范围
 
-Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改变某个会话的系统提示词，以及该会话可见的 global 工具集合。它的本地 HTTP API 只接受 loopback 客户端、loopback Host 和严格同源的 JSON 写请求。不要通过反向代理、隧道或其他方式将该接口暴露给不可信网络。
+Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改变某个会话的系统提示词和该会话可见的 global 工具集合，也可以向会话追加 user 消息或构造 assistant 消息。它的本地 HTTP API 只接受 loopback 客户端、loopback Host 和 JSON 写请求；带 `Origin` 时要求与 loopback Host 同源，并拒绝 `null` Origin 及跨站 `Sec-Fetch-Site`。不要通过反向代理、隧道或其他方式将该接口暴露给不可信网络。
 
 ## 报告问题
 
@@ -19,5 +19,6 @@ Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改
 ## 已知边界
 
 - 提示词内容由用户编写。一段让模型误用工具的提示词不是本插件的漏洞。
-- API 没有独立用户认证。写请求的 loopback/Origin/Content-Type 检查是 CSRF 与网络暴露的纵深防御，不是身份认证。请不要通过反向代理、隧道或其他方式把 API 暴露到不可信网络。
+- 追加的 assistant 消息会被模型当作真实历史；这是用户显式执行的消息管理操作，不是身份认证绕过。
+- API 没有独立用户认证。写请求的 loopback/Origin/Sec-Fetch-Site/Content-Type 检查是 CSRF 与网络暴露的纵深防御，不是身份认证。请不要通过反向代理、隧道或其他方式把 API 暴露到不可信网络。
 - Prompt Lab 不替代 DSH 的审批、沙箱或工具策略。

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "提示词实验室",
-    "description": "按会话编辑 DeepSeek Harness 的系统提示词分段，而不是整篇替换。可以保存可复用的分段模板、应用预设、恢复自动备份，在空白窗口首轮对话前先准备配置，并按会话关闭 global 工具。只影响你明确开启的会话。",
+    "description": "从会话输入框左下角打开 Prompt Lab，按会话改写、置空或在指定位置新增 DeepSeek Harness 的系统提示词 section，也可追加 user 消息、构造 assistant 消息。提供可复用模板、预设、自动备份和空白窗口草稿，并可按会话关闭 global 工具；只影响你明确开启的会话，不提供破限文本或预设。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

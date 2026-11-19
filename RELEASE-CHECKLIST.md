@@ -22,7 +22,7 @@ npm run check:release
 
 `npm publish` 也会自动运行 `prepublishOnly`（测试 + npm 包内容检查 + 发行元数据检查）。在真实 GitHub 所有者尚未填写前，发布检查应当失败；这是有意的保护，不要绕过。
 
-包内应包含运行时代码、`locale/`、`docs/`、`assets/`、`icon.svg`、`README.md`、`CHANGELOG.md`、`LICENSE`；不应包含 `test/`、开发说明、`node_modules/` 或本地配置。
+包内应包含运行时代码、`locale/`、`docs/`、`assets/`、`icon.png`、`README.md`、`CHANGELOG.md`、`LICENSE`；不应包含 `test/`、开发说明、`node_modules/` 或本地配置。
 
 再检查没有本地路径、个人姓名、邮箱、凭据或工作区路径：
 
@@ -125,5 +125,5 @@ dsh plugin --profile <profile> add dsh-prompt-lab
 
 - 以后有真实截图时，在仓库根添加 `screenshots.json`；市场会自动读取，不需要再提目录 PR。
 - 仓库地址确定后，在 README 顶部加 CI badge。
-- 如果需要英文详情页，再添加 `docs/DETAIL.en.md`；没有声明 detail 时插件管理器会回退到 README。
+- 英文详情页已由 `docs/DETAIL.md` 提供；如需其他语言，再添加 `docs/DETAIL.<lang>.md` 并在对应 locale 中声明 `meta.detail`。没有声明 detail 时插件管理器会回退到英文或 README。
 - 每个新 DSH 版本重新验证。插件使用 `agent.ctx.systemPrompt.section()`、`tools.restrict()` 和若干 Host 服务；`systemPrompt.layers` 是内部回退路径。

@@ -124,7 +124,7 @@ Prompt Lab 能改变 Agent 看到的内容，因此请把它当作**高权限的
 - 支持 DSH `0.2.2-rc.2` 到 `0.2.2-rc.5`；使用 `agent.ctx.systemPrompt.section()`、`tools.restrict()` 等接口。
 - `clientModules.graph().release`、`systemPrompt.layers` 等 DSH 内部接口在后续版本可能变化；升级 DSH 后建议重新验证分段采样和工具开关。`systemPrompt.layers` 仅作为兼容回退，不是稳定扩展契约。
 - 可能与其他提供提示词修改能力的插件冲突。
-- 面板 UI 目前只有中文；locale 仅提供英文标题和描述。
+- 面板 UI 目前只有中文；locale 中的英文仅有标题和描述。
 - 分段编辑对 `complete` preset 不生效。
 - 工具开关只覆盖 global 工具；scoped/preset 工具不可在面板里控制。
 - 没有云同步、跨设备同步或团队共享。

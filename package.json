@@ -1,12 +1,12 @@
 {
   "name": "dsh-prompt-lab",
   "version": "1.0.0",
-  "description": "Per-session system-prompt section editor for DeepSeek Harness, with templates, presets, backups, drafts and tool switches.",
+  "description": "Per-session system-prompt section editor for DeepSeek Harness with templates, presets, backups, drafts, message appends and tool switches.",
   "license": "MIT",
   "author": "DSH Prompt Lab contributors",
   "type": "module",
   "main": "./index.js",
-  "icon": "./icon.svg",
+  "icon": "./icon.png",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -34,7 +34,7 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg",
+    "./icon": "./icon.png",
     "./package.json": "./package.json"
   },
   "files": [
@@ -45,7 +45,7 @@
     "locale",
     "docs",
     "assets",
-    "icon.svg",
+    "icon.png",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

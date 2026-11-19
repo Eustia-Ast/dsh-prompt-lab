@@ -6,7 +6,7 @@
 
 ### 安全
 
-- 本地 `/prompt-lab/api` 路由拒绝跨站写入：要求 JSON Content-Type、同源 Origin，并校验存在时的 `Sec-Fetch-Site`。
+- 本地 `/prompt-lab/api` 路由拒绝跨站写入：要求 JSON Content-Type，校验存在时的同源 Origin 与 `Sec-Fetch-Site`。
 - API 路径只接受精确路由或它的子路径。
 - 拒绝 `.`/`..` 会话 ID，避免会话路径逃出 `sessions/`。
 - 清空/清理数据目录前要求所有权标记；迁移时复制该标记。

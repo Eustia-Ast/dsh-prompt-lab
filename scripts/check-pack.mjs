@@ -28,7 +28,7 @@ const required = [
   'LICENSE',
   'README.md',
   'CHANGELOG.md',
-  'icon.svg',
+  'icon.png',
   'assets/icon-180.png',
   'lib/path-guard.js'
 ]
