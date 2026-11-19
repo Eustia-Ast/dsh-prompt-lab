@@ -1,6 +1,6 @@
 # Prompt Lab（提示词实验室）
 
-以每段为单位编辑 DeepSeek Harness 的系统提示词分段。
+以会话为范围控制系统提示词分段 section，支持覆盖/置空/新增，保留漂移检测与恢复机制。
 
 Prompt Lab 是一个 DeepSeek Harness（DSH）插件。打开一个会话的 Prompt Lab 并显式开启后，它可以改写、置空或在任意位置新增该会话的提示词分段；其他没有开启的会话继续使用 DSH 的官方装配。同时插件提供追加user消息和伪造的assistant消息的能力。它还提供模板库、预设、自动备份、空白窗口草稿和按会话的 global 工具开关。本插件暂不提供破限文本或预设。
 
@@ -88,8 +88,9 @@ Prompt Lab 能改变 Agent 看到的内容，因此请把它当作**高权限的
 
 面板通过 DSH Web server 上的同源路由 `/prompt-lab/api` 读写配置。该接口：
 
-- 写请求必须带有效的同源 `Origin` 和 `application/json` Content-Type；
-- 写请求只接受来自 loopback 客户端、且 Host/Origin 使用 `localhost` 或 loopback IP 的请求；非本机网络客户端和非 loopback Host 会被拒绝；
+- 写请求必须是 `application/json`；带 `Origin` 时会校验它必须与 loopback Host 同源；
+- 某些 DSH 宿主在同源 POST 上不发送 `Origin`，此时仍要求 loopback 客户端、loopback Host，并校验存在时的 `Sec-Fetch-Site`；
+- 非本机网络客户端、非 loopback Host、`null` Origin 和跨站 `Sec-Fetch-Site` 会被拒绝；
 - 不提供远程鉴权，也不应该通过反向代理、隧道或其他方式向不可信网络开放；
 - 不调用模型、不发送遥测、不访问外部网络。
 

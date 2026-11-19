@@ -230,9 +230,18 @@ async function invoke (handler, { method = 'POST', url = ROUTE, headers = {}, bo
   })
   assert.equal(plain.status, 403, 'text/plain simple request must be rejected')
   const missingOrigin = await invoke(handler, {
-    headers: { 'content-type': 'application/json', host: '127.0.0.1:1' }
+    headers: { 'content-type': 'application/json', host: '127.0.0.1:1' },
+    body: JSON.stringify({ op: 'state.get' })
   })
-  assert.equal(missingOrigin.status, 403, 'missing Origin must be rejected')
+  assert.equal(missingOrigin.status, 200, 'a same-origin client that omits Origin must still work')
+  const missingOriginPlain = await invoke(handler, {
+    headers: { 'content-type': 'text/plain', host: '127.0.0.1:1' }
+  })
+  assert.equal(missingOriginPlain.status, 403, 'missing Origin must not bypass the JSON requirement')
+  const missingOriginCrossSite = await invoke(handler, {
+    headers: { 'content-type': 'application/json', host: '127.0.0.1:1', 'sec-fetch-site': 'cross-site' }
+  })
+  assert.equal(missingOriginCrossSite.status, 403, 'missing Origin must not bypass Sec-Fetch-Site')
   const nullOrigin = await invoke(handler, {
     headers: { 'content-type': 'application/json', host: '127.0.0.1:1', origin: 'null' }
   })
