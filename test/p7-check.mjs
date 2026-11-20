@@ -98,6 +98,7 @@ const api = createApi({
   dataDirSource: 'default',
   warnings,
   agentOf: (sessionId) => live.get(sessionId),
+  isPromptLocked: () => false,
   isDraftSession: (sessionId) => draftIds.has(sessionId),
   readOnlySection: () => false,
   livenessOf: async (ids) => new Map(ids.map((id) => [
@@ -124,14 +125,11 @@ await api.handle({ op: 'session.set', sessionId: sid, enabled: true })
 // ------------------------------------------------ full session configuration
 await api.handle({ op: 'fragment.save', sessionId: sid, key: 'harness:identity', mode: 'replace', text: 'override identity' })
 await api.handle({ op: 'extra.save', sessionId: sid, name: 'custom:extra', anchor: 'tool:bash', order: 10, text: 'extra text' })
-await api.handle({ op: 'transient.save', sessionId: sid, name: 'custom:once', anchor: '__end__', order: 20, text: 'once text', activation: 'once' })
 await api.handle({ op: 'tools.set', sessionId: sid, deny: ['bash'] })
 
 let state = store.state(sid)
 const extraBefore = state.extras.find((entry) => entry.name === 'custom:extra')
-const transientBefore = state.transientSections.find((entry) => entry.name === 'custom:once')
 assert.ok(extraBefore.textId)
-assert.ok(transientBefore.textId)
 assert.equal(state.toolPolicy.deny.join(','), 'bash')
 
 // Empty new-section saves are rejected; official "置空" remains a separate mode.
@@ -139,18 +137,13 @@ await assert.rejects(
   () => api.handle({ op: 'extra.save', sessionId: sid, name: 'custom:blank', anchor: '__end__', text: '   ' }),
   /不能为空/
 )
-await assert.rejects(
-  () => api.handle({ op: 'transient.save', sessionId: sid, name: 'custom:blank-once', anchor: '__end__', text: '' }),
-  /不能为空/
-)
-
 const captured = await api.handle({ op: 'preset.capture', sessionId: sid, name: 'p7-full' })
 const preset = store.presets().presets.find((entry) => entry.name === 'p7-full')
 assert.ok(preset)
 assert.equal(preset.version, 3)
 assert.equal(preset.fragmentIds.length, 1)
 assert.equal(preset.extras.length, 1)
-assert.equal(preset.transientSections.length, 1)
+assert.equal(preset.transientSections.length, 0)
 assert.equal(preset.toolPolicy.deny.join(','), 'bash')
 assert.equal(captured.session.currentPreset.source, 'preset')
 
@@ -162,7 +155,7 @@ assert.equal(store.hasDraft(draftSid), true)
 assert.equal(fs.existsSync(path.join(dir, 'sessions', draftSid, 'state.json')), false)
 const draftState = store.draft(draftSid).state
 assert.equal(draftState.extras.length, 1)
-assert.equal(draftState.transientSections.length, 1)
+assert.equal(draftState.transientSections.length, 0)
 assert.equal(draftState.toolPolicy.deny.join(','), 'bash')
 
 // Reset, then apply the preset to the main session.
@@ -174,17 +167,15 @@ assert.equal(state.toolPolicy.deny.length, 0)
 const applied = await api.handle({ op: 'preset.apply', sessionId: sid, id: preset.id })
 assert.equal(applied.applied.overrides, 1)
 assert.equal(applied.applied.extras, 1)
-assert.equal(applied.applied.transientSections, 1)
+assert.equal(applied.applied.transientSections, 0)
 assert.equal(applied.applied.toolDeny, 1)
 assert.equal(applied.applied.unresolved, 0)
 state = store.state(sid)
 assert.equal(state.extras[0].textId, extraBefore.textId)
-assert.notEqual(state.transientSections[0].id, transientBefore.id)
-assert.equal(state.transientSections[0].activation, 'once')
 assert.equal(state.toolPolicy.deny.join(','), 'bash')
 assert.equal(toolChanges.includes(sid), true)
 assert.equal(applied.session.currentPreset.extraCount, 1)
-assert.equal(applied.session.currentPreset.transientCount, 1)
+assert.equal(applied.session.currentPreset.transientCount, 0)
 assert.equal(applied.session.currentPreset.toolDenyCount, 1)
 
 // ------------------------------------------------------------- backup v3
@@ -194,7 +185,7 @@ assert.equal(payload.version, 3)
 assert.equal(payload.presets, undefined)
 assert.equal(payload.session.lastPreset, undefined)
 assert.equal(payload.session.prompt.extras.length, 1)
-assert.equal(payload.session.prompt.transientSections.length, 1)
+assert.equal(payload.session.prompt.transientSections.length, 0)
 assert.equal(payload.session.capabilities.toolPolicy.deny.join(','), 'bash')
 assert.ok(payload.sectionTexts.length >= 1)
 
@@ -204,7 +195,7 @@ const restored = await api.handle({ op: 'backup.restore', sessionId: sid, file: 
 assert.equal(restored.restored.version, 3)
 state = store.state(sid)
 assert.equal(state.extras.length, 1)
-assert.equal(state.transientSections.length, 1)
+assert.equal(state.transientSections.length, 0)
 assert.equal(state.toolPolicy.deny.join(','), 'bash')
 assert.equal(state.lastPreset, null)
 assert.equal(state.presetModified, false)
@@ -232,7 +223,7 @@ const missing = await api.handle({ op: 'preset.apply', sessionId: sid, id: prese
 assert.equal(missing.applied.unresolved, 0)
 state = store.state(sid)
 assert.ok(!state.extras.some((entry) => entry.name === 'custom:extra'))
-assert.equal(state.transientSections.length, 1)
+assert.equal(state.transientSections.length, 0)
 
 // --------------------------------------------------- preset usage/delete
 const usage = await api.handle({ op: 'preset.usage', id: preset.id })

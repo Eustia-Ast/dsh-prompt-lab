@@ -4,6 +4,8 @@
 
 Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改变某个会话的系统提示词和该会话可见的 global 工具集合，也可以向会话追加 user 消息或构造 assistant 消息。它的本地 HTTP API 只接受 loopback 客户端、loopback Host 和 JSON 写请求；带 `Origin` 时要求与 loopback Host 同源，并拒绝 `null` Origin 及跨站 `Sec-Fetch-Site`。不要通过反向代理、隧道或其他方式将该接口暴露给不可信网络。
 
+首轮对话开始后，提示词配置会被锁定；锁定会话使用提示词快照，不再接受改写、新增、恢复或预设应用。
+
 ## 报告问题
 
 请不要开公开 issue。请使用 GitHub 仓库的 **Security → Report a vulnerability** 私下报告，并附上：
@@ -14,7 +16,7 @@ Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改
 
 ## 支持的版本
 
-安全修复只进入最新的 `1.0.x` 候选/正式版本；旧版本不维护。
+安全修复只进入最新的 `1.1.x` 候选/正式版本；旧版本不维护。
 
 ## 已知边界
 

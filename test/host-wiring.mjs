@@ -254,16 +254,16 @@ const readOnlyRejected = await req('fragment.save', { sessionId: agent.id, key: 
 assert.equal(readOnlyRejected.ok, false)
 
 const saved = await req('fragment.save', { sessionId: agent.id, key: 'harness:identity', text: 'never identity', mode: 'replace' })
-assert.equal(saved.ok, true)
+assert.equal(saved.ok, false, 'started sessions must be prompt-locked')
 const rewritten = await agent.ctx.systemPrompt.assemble({ agent, scope: agent })
-assert.equal(rewritten.sections[0].text, 'never identity')
+assert.notEqual(rewritten.sections[0].text, 'never identity')
 
-// Explicit recapture still returns the official baseline and keeps the override.
+// Explicit recapture still returns the official baseline.
 const recaptured = await req('assemble.capture', { sessionId: agent.id })
 assert.equal(recaptured.ok, true)
 assert.equal(recaptured.value.capture.ok, true)
 assert.equal(recaptured.value.prompt.sections.length, 2)
-assert.equal((await agent.ctx.systemPrompt.assemble({ agent, scope: agent })).sections[0].text, 'never identity')
+assert.notEqual((await agent.ctx.systemPrompt.assemble({ agent, scope: agent })).sections[0].text, 'never identity')
 
 // Disposal removes the scoped registration.
 listeners.get('agent/disposed')[0]({ agent })
@@ -343,68 +343,21 @@ assert.equal(idleEnabled.value.session.draft, true)
 assert.equal(fs.existsSync(path.join(dir, 'drafts', `${idleId}.json`)), true)
 assert.equal(fs.existsSync(path.join(dir, 'sessions', idleId, 'state.json')), false)
 
-// Transient sections are always one-shot: armed for one user turn and
-// disposed idle without creating chat messages.
+// Transient sections were removed in 1.1.0. The old API must reject them.
 const transientAgent = makeAgent('session-wire-transient')
 boundaries.set(transientAgent.session, { openTurnStartSeq: 1, lastTurn: 1 })
 live.set(transientAgent.id, transientAgent)
 await listeners.get('agent/created')[0]({ agent: transientAgent })
 await req('session.set', { sessionId: transientAgent.id, enabled: true })
-await req('transient.save', {
+const transientRejected = await req('transient.save', {
   sessionId: transientAgent.id,
   name: 'custom:once',
   anchor: '__end__',
   text: 'ONCE_SECTION',
   activation: 'once'
 })
-const startTurn = (turn) => {
-  listeners.get('session/event')[0](transientAgent.session, { type: 'turn/start', data: { turn } })
-}
-const stepOnce = async (turn) => {
-  let stepped = false
-  await listeners.get('agent/pre-step')[0]({ agent: transientAgent, turn }, async () => {
-    stepped = true
-    return { kind: 'enter', messages: [{ role: 'user', content: [{ type: 'text', text: 'turn input' }] }] }
-  })
-  assert.equal(stepped, true)
-  listeners.get('session/event')[0](transientAgent.session, { type: 'step/start', data: { turn, step: 1 } })
-}
-startTurn(1)
-let transientAssembly = await transientAgent.ctx.systemPrompt.assemble({ agent: transientAgent, scope: transientAgent })
-assert.ok(transientAssembly.sections.some((section) => section.text === 'ONCE_SECTION'))
-await stepOnce(1)
-transientAssembly = await transientAgent.ctx.systemPrompt.assemble({ agent: transientAgent, scope: transientAgent })
-assert.ok(transientAssembly.sections.some((section) => section.text === 'ONCE_SECTION'))
-const consumedDuringTurn = await req('state.get', { sessionId: transientAgent.id })
-const consumedRow = consumedDuringTurn.value.prompt.sections.find((row) => row.name === 'custom:once')
-assert.equal(consumedRow.consumedAtTurn, 1)
-listeners.get('agent/status')[0]({ agent: transientAgent, status: 'idle' })
-transientAssembly = await transientAgent.ctx.systemPrompt.assemble({ agent: transientAgent, scope: transientAgent })
-assert.ok(!transientAssembly.sections.some((section) => section.text === 'ONCE_SECTION'))
-const transientState = await req('state.get', { sessionId: transientAgent.id })
-const onceRow = transientState.value.prompt.sections.find((row) => row.name === 'custom:once')
-assert.equal(onceRow.status, 'transient')
-assert.equal(onceRow.consumedAtTurn, 1)
-startTurn(2)
-await stepOnce(2)
-transientAssembly = await transientAgent.ctx.systemPrompt.assemble({ agent: transientAgent, scope: transientAgent })
-assert.ok(!transientAssembly.sections.some((section) => section.text === 'ONCE_SECTION'))
-
-// Reset a consumed once section and verify it fires again on the next turn.
-await req('transient.save', {
-  sessionId: transientAgent.id,
-  id: onceRow.transientId,
-  name: 'custom:once',
-  anchor: '__end__',
-  text: 'ONCE_SECTION_RESET',
-  activation: 'once',
-  enabled: true
-})
-startTurn(3)
-transientAssembly = await transientAgent.ctx.systemPrompt.assemble({ agent: transientAgent, scope: transientAgent })
-assert.ok(transientAssembly.sections.some((section) => section.text === 'ONCE_SECTION_RESET'))
-await stepOnce(3)
-listeners.get('agent/status')[0]({ agent: transientAgent, status: 'idle' })
+assert.equal(transientRejected.ok, false)
+assert.match(transientRejected.error, /已移除临时段/)
 
 // List messages and append a user message to the live session.
 const messageAgent = makeAgent('session-wire-messages')
@@ -497,5 +450,5 @@ const health = await routes[0].handler(
 )
 assert.equal(health, undefined)
 
-assert.ok(logs.every((message) => message.includes('只读')))
+assert.ok(logs.every((message) => /只读|锁定|已移除临时段/.test(message)))
 console.log('host wiring checks passed')

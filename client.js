@@ -671,6 +671,7 @@ window.__ModuleLoader__.load({
       }
 
       const rows = data.prompt.sections
+      const locked = data.session.locked === true
       // Count what is actually assembled, not what is saved: a suspended
       // override contributes its official text, an inactive transient
       // contributes nothing, and a suppressed tool section is empty.
@@ -846,7 +847,7 @@ window.__ModuleLoader__.load({
             h('input', { type: 'radio', checked: mode === 'replace', onChange: () => setMode('replace') }), '替换'),
           h('label', {
             style: { ...css.hint, display: 'flex', alignItems: 'center', gap: '5px', opacity: canEmpty ? 1 : 0.5 },
-            title: canEmpty ? '' : '新增段/临时段不能置空，请直接删除'
+            title: canEmpty ? '' : '新增段不能置空，请直接删除'
           },
             h('input', {
               type: 'radio',
@@ -1014,6 +1015,10 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', null,
+        locked
+          ? null
+          : h('div', { style: css.notice }, '请在首次对话之前完成系统提示词配置。'),
+
         data.session.draft
           ? h('div', { style: css.notice },
             '这是首次对话前的窗口：模板、保存预设、片段库和设置属于全局操作，会立即生效；映射、启用状态、新增段等窗口配置暂存草稿，发送第一条消息后自动提交，关闭窗口则丢弃。')
@@ -1045,7 +1050,7 @@ window.__ModuleLoader__.load({
           : null,
 
         data.prompt.captured
-          ? h('div', { style: css.notice }, `已读取当前装配：${rows.length} 段，合计 ${tok(total)}。改动从下一次请求起生效。`)
+          ? h('div', { style: css.notice }, locked ? `首轮装配已锁定：${rows.length} 段，合计 ${tok(total)}。` : `已读取当前装配：${rows.length} 段，合计 ${tok(total)}。改动从下一次请求起生效。`)
           : h('div', { style: css.warnNotice },
             h('div', { style: { marginBottom: '6px' } },
               data.capture?.reason === 'not-running'
@@ -1104,7 +1109,9 @@ window.__ModuleLoader__.load({
                 : null)),
 
         h('div', { style: { display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' } },
-          h('button', { style: { ...css.button, ...css.primary }, onClick: () => setAdding((v) => !v) }, adding ? '收起' : '＋ 新增段'),
+          locked
+            ? h('span', { style: css.hint }, '首轮已开始，提示词页只读；新建会话后可继续配置。')
+            : h('button', { style: { ...css.button, ...css.primary }, onClick: () => setAdding((v) => !v) }, adding ? '收起' : '＋ 新增段'),
           h('label', {
             style: { ...css.hint, marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }
           },
@@ -1124,7 +1131,7 @@ window.__ModuleLoader__.load({
           }),
           '收起只读片段详情')),
 
-        adding
+        adding && !locked
           ? h('div', { style: { ...css.card, padding: '10px' } },
             h('div', { style: { ...css.hint, marginBottom: '6px' } }, '段名建议带前缀，例如 custom:persona。同名段不会被重复插入。'),
             h('input', { style: { ...css.input, marginBottom: '6px' }, value: newName, spellCheck: false, onChange: (e) => setNewName(e.target.value) }),
@@ -1137,26 +1144,15 @@ window.__ModuleLoader__.load({
             h('option', { value: '__start__' }, '最前面（所有官方段之前）'),
             h('option', { value: '__end__' }, '最后面（所有官方段之后）'),
             officialNames.map((name) => h('option', { key: name, value: name }, `在 ${name} 之后`))),
-            h('div', { style: { ...css.hint, marginBottom: '4px' } }, '激活方式：'),
-            h('select', {
-              style: { ...css.input, marginBottom: '6px' },
-              value: newActivation,
-              onChange: (e) => setNewActivation(e.target.value)
-            },
-            h('option', { value: 'persistent' }, '常驻（默认）'),
-            h('option', { value: 'once' }, '仅下一轮')),
             h('textarea', { style: { ...css.textarea, minHeight: '120px' }, value: newText, spellCheck: false, onChange: (e) => setNewText(e.target.value) }),
             h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
               h('button', {
                 style: { ...css.button, ...css.primary },
                 disabled: newText.trim() === '',
-                onClick: () => run((newActivation === 'persistent'
-                  ? call('extra.save', { sessionId, name: newName, anchor: newAnchor, text: newText })
-                  : call('transient.save', { sessionId, name: newName, anchor: newAnchor, text: newText, activation: newActivation }))
+                onClick: () => run(call('extra.save', { sessionId, name: newName, anchor: newAnchor, text: newText })
                   .then((next) => {
                     setAdding(false)
                     setNewText('')
-                    setNewActivation('persistent')
                     return next
                   }))
               }, '保存'),
@@ -1201,7 +1197,7 @@ window.__ModuleLoader__.load({
               row.status === 'transient' ? `　激活方式：仅下一轮${row.consumedAtTurn !== null ? `；已在第 ${row.consumedAtTurn} 轮使用` : ''}。` : '',
               row.source === 'plugin' && row.sensitivity === null ? '　内容由插件提供，未审核；风险无法从段名判断，改动前请先看原文。' : '',
               completeActive ? '　本会话使用完整提示词，分段编辑不生效。' : ''),
-          !collapsed && !readOnly && row.status !== 'extra' && row.status !== 'transient' && templates.length > 0
+          !locked && !collapsed && !readOnly && row.status !== 'extra' && row.status !== 'transient' && templates.length > 0
             ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '0 10px 8px', flexWrap: 'wrap' } },
               h('span', { style: css.hint }, '模板'),
               h('select', {
@@ -1214,20 +1210,20 @@ window.__ModuleLoader__.load({
                 `${template.label || '默认'} · ${template.mode === 'empty' ? '置空' : '替换'} · ~${template.tokens} tok`))))
             : null,
           collapsed ? null : h('div', { style: { display: 'flex', gap: '6px', padding: '0 10px 10px', flexWrap: 'wrap' } },
-            readOnly
+            readOnly || locked
               ? h('button', {
                 style: { ...css.button, ...css.tiny },
                 onClick: () => setViewing(viewing === row.name ? null : row.name)
               }, viewing === row.name ? '收起正文' : '查看正文')
               : h('button', { style: { ...css.button, ...css.tiny }, onClick: () => (editing === row.name ? setEditing(null) : open(row)) },
                 editing === row.name ? '收起' : (row.status === 'official' ? '改写' : '编辑')),
-            (row.status === 'active' || row.status === 'suspended' || row.status === 'pending' || (readOnly && row.status === 'orphan'))
+            !locked && (row.status === 'active' || row.status === 'suspended' || row.status === 'pending' || (readOnly && row.status === 'orphan'))
               ? h('button', { style: { ...css.button, ...css.tiny }, onClick: () => run(call('override.clear', { sessionId, key: row.name })) }, '恢复官方')
               : null,
-            !readOnly && row.status === 'suspended'
+            !locked && !readOnly && row.status === 'suspended'
               ? h('button', { style: { ...css.button, ...css.tiny }, onClick: () => run(call('fragment.rebase', { sessionId, key: row.name })) }, '重新锚定')
               : null,
-            !readOnly && row.status === 'orphan'
+            !locked && !readOnly && row.status === 'orphan'
               ? h('button', {
                 style: { ...css.button, ...css.tiny },
                 onClick: () => run(call('extra.save', { sessionId, name: row.name, anchor: '__end__', text: row.text })
@@ -1258,16 +1254,16 @@ window.__ModuleLoader__.load({
             row.status === 'transient'
               ? h('button', { style: { ...css.button, ...css.tiny, ...css.danger }, onClick: () => run(call('transient.delete', { sessionId, id: row.transientId })) }, '删除')
               : null,
-            row.status === 'extra'
+            !locked && row.status === 'extra'
               ? h('button', { style: { ...css.button, ...css.tiny }, onClick: () => run(call('extra.move', { sessionId, id: row.extraId, delta: -1 })) }, '↑')
               : null,
-            row.status === 'extra'
+            !locked && row.status === 'extra'
               ? h('button', { style: { ...css.button, ...css.tiny }, onClick: () => run(call('extra.move', { sessionId, id: row.extraId, delta: 1 })) }, '↓')
               : null,
-            row.status === 'extra'
+            !locked && row.status === 'extra'
               ? h('button', { style: { ...css.button, ...css.tiny, ...css.danger }, onClick: () => run(call('extra.delete', { sessionId, id: row.extraId })) }, '删除')
               : null),
-          !collapsed && viewing === row.name && readOnly
+          viewing === row.name
             ? h('div', { style: { padding: '0 10px 10px' } },
               h('pre', {
                 style: {
@@ -1282,7 +1278,7 @@ window.__ModuleLoader__.load({
                   padding: '8px',
                   font: '11.5px/1.55 ' + PALETTE.mono
                 }
-              }, row.officialText || '（空）'))
+              }, (readOnly ? (row.officialText || '') : (row.text || '')) || '（空）'))
             : null,
           editing === row.name && !readOnly ? renderEditor(row) : null)
           }),
@@ -1293,6 +1289,7 @@ window.__ModuleLoader__.load({
 
     // ----------------------------------------------------------- preset tab
     function PresetTab ({ sessionId, data, refresh, setError, setToast }) {
+      const locked = data.session.locked === true
       const [presetName, setPresetName] = useState('')
       const [confirmReset, setConfirmReset] = useState(false)
       const [deleteTarget, setDeleteTarget] = useState(null)
@@ -1319,7 +1316,7 @@ window.__ModuleLoader__.load({
           if (typeof setToast === 'function') {
             const applied = next?.applied
             setToast(applied
-              ? `已应用：覆盖 ${applied.overrides} 新增 ${applied.extras} 临时 ${applied.transientSections} 工具 ${applied.toolDeny}${applied.unresolved > 0 ? ` · 无法恢复 ${applied.unresolved}` : ''}`
+              ? `已应用：覆盖 ${applied.overrides} 新增 ${applied.extras} 工具 ${applied.toolDeny}${applied.unresolved > 0 ? ` · 无法恢复 ${applied.unresolved}` : ''}`
               : '已应用预设')
           }
         } catch (error) {
@@ -1351,7 +1348,7 @@ window.__ModuleLoader__.load({
       const canResetPreset = currentSource !== 'none' || currentCount > 0
 
       return h('div', null,
-        h('div', { style: css.notice }, `预设保存官方覆盖、新增段、临时段与工具开关；正文仍由文本库提供。上限 ${limit} 个，可在设置里调整。`),
+        h('div', { style: css.notice }, `预设保存官方覆盖、新增段与工具开关；正文仍由文本库提供。上限 ${limit} 个，可在设置里调整。`),
         data.session.draft
           ? h('div', { style: css.warnNotice }, '模板与保存预设属于全局操作，会立即保存；当前窗口的映射与来源预设暂存草稿，首次对话后提交。')
           : null,
@@ -1363,14 +1360,14 @@ window.__ModuleLoader__.load({
             current?.modified ? badge('已修改', PALETTE.warn) : null),
           h('div', { style: css.desc }, currentLabel),
           h('div', { style: { ...css.hint, padding: '0 10px 8px' } },
-            `覆盖 ${current?.overrideCount ?? Object.keys(data.session.overrides ?? {}).length} · 新增 ${current?.extraCount ?? 0} · 临时 ${current?.transientCount ?? 0} · 工具关闭 ${current?.toolDenyCount ?? 0}`,
+            `覆盖 ${current?.overrideCount ?? Object.keys(data.session.overrides ?? {}).length} · 新增 ${current?.extraCount ?? 0} · 工具关闭 ${current?.toolDenyCount ?? 0}`,
             stats
               ? `　生效 ${stats.active} · 挂起 ${stats.suspended} · 失效 ${stats.orphan}${stats.pending > 0 ? ` · 待确认 ${stats.pending}` : ''}${stats.blocked > 0 ? ` · 不生效 ${stats.blocked}` : ''}`
               : ''),
           currentSource === 'missing'
             ? h('div', { style: { ...css.hint, color: PALETTE.danger, padding: '0 10px 8px' } }, '来源预设已被删除；当前配置仍然保留，可另存为新预设。')
             : null,
-          canResetPreset
+          canResetPreset && !locked
             ? h('div', { style: { padding: '0 10px 10px' } },
               h('button', {
                 style: { ...css.button, ...css.tiny, ...css.danger },
@@ -1400,7 +1397,7 @@ window.__ModuleLoader__.load({
               isApplied ? h('span', { style: { ...css.dockDot, marginRight: '2px' } }) : null,
               h('span', { style: css.name }, preset.name),
               h('span', { style: { ...css.hint, marginLeft: 'auto' } },
-                `覆盖 ${preset.fragmentIds.length} · 新增 ${preset.extras.length} · 临时 ${preset.transientSections.length} · 工具 ${preset.toolPolicy.deny.length}`)),
+                `覆盖 ${preset.fragmentIds.length} · 新增 ${preset.extras.length} · 工具 ${preset.toolPolicy.deny.length}`)),
             isApplied
               ? h('div', { style: { ...css.desc, color: PALETTE.ok } },
                 `正在使用`,
@@ -1409,7 +1406,7 @@ window.__ModuleLoader__.load({
                   : '')
               : null,
             h('div', { style: { display: 'flex', gap: '6px', padding: '0 10px 10px', flexWrap: 'wrap' } },
-              h('button', {
+              locked ? null : h('button', {
                 style: { ...css.button, ...css.tiny, ...(isApplied ? {} : css.primary) },
                 onClick: () => void applyPreset(preset)
               }, isApplied ? '重新应用' : '应用'),
@@ -1439,7 +1436,7 @@ window.__ModuleLoader__.load({
         confirmReset
           ? h(ConfirmDialog, {
             title: '恢复默认配置？',
-            message: '将清空本会话正在应用的官方覆盖、新增段、临时段与工具开关，并回到不使用预设的状态。已保存的预设和文本库不会被删除。',
+            message: '将清空本会话正在应用的官方覆盖、新增段与工具开关，并回到不使用预设的状态。已保存的预设和文本库不会被删除。',
             confirmLabel: '恢复默认配置',
             danger: true,
             onCancel: () => setConfirmReset(false),
@@ -1454,6 +1451,7 @@ window.__ModuleLoader__.load({
 
     // ----------------------------------------------------------- backup tab
     function BackupTab ({ sessionId, data, refresh, setError, setToast }) {
+      const locked = data.session.locked === true
       const [label, setLabel] = useState('')
       const [restoreTarget, setRestoreTarget] = useState(null)
       const run = async (promise) => {
@@ -1491,9 +1489,9 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...css.name, fontFamily: PALETTE.mono } }, new Date(entry.at || 0).toLocaleString()),
             badge('v3 会话快照', PALETTE.dim),
             h('span', { style: { ...css.hint, marginLeft: 'auto' } },
-              `${entry.overrides} 覆盖 · ${entry.extras} 新增 · ${entry.transient ?? 0} 临时 · ${entry.toolDeny ?? 0} 工具`)),
+              `${entry.overrides} 覆盖 · ${entry.extras} 新增 · ${entry.toolDeny ?? 0} 工具`)),
           h('div', { style: { ...css.desc } }, entry.label || '（无标签）'),
-          h('div', { style: { padding: '0 10px 10px' } },
+          locked ? null : h('div', { style: { padding: '0 10px 10px' } },
             h('button', {
               style: { ...css.button, ...css.tiny },
               onClick: () => setRestoreTarget(entry)
@@ -1508,23 +1506,25 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', null,
-        h('div', { style: css.notice }, '每次写入前会自动留一份会话快照；手动备份单独计数。恢复只还原提示词段、新增段、临时段与工具开关，不记录也不还原预设页。'),
-        h('div', { style: { display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' } },
-          h('input', { style: { ...css.input, flex: '1 1 140px' }, placeholder: '手动备份备注（可选）', value: label, onChange: (e) => setLabel(e.target.value) }),
-          h('button', {
-            style: { ...css.button, ...css.primary },
-            onClick: () => run(call('backup.create', { sessionId, label }).then((next) => {
-              setLabel('')
-              return next
-            }))
-          }, '手动备份')),
+        h('div', { style: css.notice }, '每次写入前会自动留一份会话快照；手动备份单独计数。恢复只还原提示词段、新增段与工具开关，不记录也不还原预设页。'),
+        locked
+          ? h('div', { style: css.notice }, '当前会话首轮已开始，提示词已锁定；本会话备份已自动删除，恢复功能关闭。')
+          : h('div', { style: { display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' } },
+            h('input', { style: { ...css.input, flex: '1 1 140px' }, placeholder: '手动备份备注（可选）', value: label, onChange: (e) => setLabel(e.target.value) }),
+            h('button', {
+              style: { ...css.button, ...css.primary },
+              onClick: () => run(call('backup.create', { sessionId, label }).then((next) => {
+                setLabel('')
+                return next
+              }))
+            }, '手动备份')),
         section('手动备份', data.backups.manual, data.limits.manualBackupLimit, '手动备份的快照，默认保留 5 份。'),
         section('自动快照', data.backups.auto, data.limits.autoBackupLimit, '每次保存/恢复前自动写入，默认保留 20 份。'),
 
         restoreTarget !== null
           ? h(ConfirmDialog, {
             title: '恢复这份会话备份？',
-            message: '只恢复提示词段、新增段、临时段与工具开关；不会恢复预设库，也不会恢复“当前使用的预设”记录。恢复后预设页显示为手工配置。',
+            message: '只恢复提示词段、新增段与工具开关；不会恢复预设库，也不会恢复“当前使用的预设”记录。恢复后预设页显示为手工配置。',
             confirmLabel: '恢复会话配置',
             danger: true,
             onCancel: () => setRestoreTarget(null),
@@ -1535,9 +1535,9 @@ window.__ModuleLoader__.load({
             }
           },
           h('div', { style: { ...css.hint, marginTop: '6px', fontFamily: PALETTE.mono } },
-            `当前：覆盖 ${current.overrideCount ?? 0} · 新增 ${current.extraCount ?? 0} · 临时 ${current.transientCount ?? 0} · 工具 ${current.toolDenyCount ?? 0}`,
+            `当前：覆盖 ${current.overrideCount ?? 0} · 新增 ${current.extraCount ?? 0} · 工具 ${current.toolDenyCount ?? 0}`,
             h('div', null,
-              `备份：覆盖 ${restoreTarget.overrides} · 新增 ${restoreTarget.extras} · 临时 ${restoreTarget.transient ?? 0} · 工具 ${restoreTarget.toolDeny ?? 0}`)))
+              `备份：覆盖 ${restoreTarget.overrides} · 新增 ${restoreTarget.extras} · 工具 ${restoreTarget.toolDeny ?? 0}`)))
           : null
       )
     }
@@ -1552,6 +1552,7 @@ window.__ModuleLoader__.load({
       const [confirmReset, setConfirmReset] = useState(false)
       const [confirmCleanup, setConfirmCleanup] = useState(false)
       const [confirmWipe, setConfirmWipe] = useState(false)
+      const [confirmPurge, setConfirmPurge] = useState(false)
 
       const run = async (promise, message) => {
         try {
@@ -1584,6 +1585,17 @@ window.__ModuleLoader__.load({
           const next = await call('state.get', { sessionId })
           refresh(next)
           if (typeof setToast === 'function') setToast('旧数据已清理')
+        } catch (error) {
+          setError(String(error.message || error))
+        }
+      }
+
+      const purgeArchived = async () => {
+        try {
+          const result = await call('config.purgeArchived', {})
+          const next = await call('state.get', { sessionId })
+          refresh(next)
+          if (typeof setToast === 'function') setToast(`已删除 ${result?.count ?? 0} 个归档/失效会话的插件信息`)
         } catch (error) {
           setError(String(error.message || error))
         }
@@ -1709,13 +1721,24 @@ window.__ModuleLoader__.load({
           : null,
 
         h('div', { style: css.card },
-          h('div', { style: css.cardHead }, h('strong', { style: { fontSize: '12.5px' } }, '当前会话')),
-          h('div', { style: css.desc }, '清除本会话的全部覆盖与新增段。片段库、预设和备份不动。'),
+          h('div', { style: css.cardHead }, h('strong', { style: { fontSize: '12.5px' } }, '归档会话清理')),
+          h('div', { style: css.desc }, '删除已归档或已不存在会话的插件快照、配置、备份和装配记录；不删除全局片段库、预设和设置。'),
           h('div', { style: { padding: '0 10px 10px' } },
             h('button', {
-              style: { ...css.button, ...css.tiny },
-              onClick: () => setConfirmReset(true)
-            }, '清除本会话覆盖'))),
+              style: { ...css.button, ...css.tiny, ...css.danger },
+              onClick: () => setConfirmPurge(true)
+            }, '删除归档会话插件信息'))),
+
+        h('div', { style: css.card },
+          h('div', { style: css.cardHead }, h('strong', { style: { fontSize: '12.5px' } }, '当前会话')),
+          h('div', { style: css.desc }, '清除本会话的全部覆盖与新增段。片段库、预设和备份不动。'),
+          data.session.locked === true
+            ? h('div', { style: { ...css.hint, padding: '0 10px 10px' } }, '首轮已开始，提示词已锁定；清除覆盖已禁用。')
+            : h('div', { style: { padding: '0 10px 10px' } },
+              h('button', {
+                style: { ...css.button, ...css.tiny },
+                onClick: () => setConfirmReset(true)
+              }, '清除本会话覆盖'))),
 
         h('div', { style: css.card },
           h('div', { style: css.cardHead }, h('strong', { style: { fontSize: '12.5px' } }, '危险操作')),
@@ -1759,6 +1782,20 @@ window.__ModuleLoader__.load({
           })
           : null,
 
+        confirmPurge
+          ? h(ConfirmDialog, {
+            title: '删除归档会话插件信息？',
+            message: '将删除已归档或已不存在会话的提示词快照、会话配置、备份和装配记录。全局片段库、预设和设置不受影响；此操作不可撤销。',
+            confirmLabel: '删除归档信息',
+            danger: true,
+            onCancel: () => setConfirmPurge(false),
+            onConfirm: () => {
+              setConfirmPurge(false)
+              purgeArchived()
+            }
+          })
+          : null,
+
         confirmWipe
           ? h(ConfirmDialog, {
             title: '清除本插件的全部数据？',
@@ -1785,8 +1822,7 @@ window.__ModuleLoader__.load({
       draft: '草稿窗口'
     }
     const ACTIVATION_LABEL = {
-      persistent: '常驻',
-      once: '仅下一轮'
+      persistent: '常驻'
     }
 
     function LibraryTab ({ sessionId, data, refresh, setError, setToast }) {
@@ -2010,8 +2046,7 @@ window.__ModuleLoader__.load({
                 value: fragment.activation,
                 onChange: (event) => void setActivation(fragment, event.target.value)
               },
-              h('option', { value: 'persistent' }, '默认：常驻'),
-              h('option', { value: 'once' }, '默认：仅下一轮'))
+              h('option', { value: 'persistent' }, '默认：常驻'))
               : null,
             fragment.readOnly
               ? null
@@ -2046,8 +2081,7 @@ window.__ModuleLoader__.load({
                 value: insertActivation,
                 onChange: (event) => setInsertActivation(event.target.value)
               },
-              h('option', { value: 'persistent' }, '常驻'),
-              h('option', { value: 'once' }, '仅下一轮')),
+              h('option', { value: 'persistent' }, '常驻')),
               h('div', { style: { display: 'flex', gap: '6px' } },
                 h('button', { style: { ...css.button, ...css.tiny, ...css.primary }, onClick: () => void confirmInsert(fragment) }, '插入'),
                 h('button', { style: { ...css.button, ...css.tiny }, onClick: () => setInserting(null) }, '取消')))
@@ -2240,7 +2274,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', margin: '16px 0 6px' } },
           h('strong', { style: { fontSize: '13px' } }, '新增段文本'),
           badge(String(insertGroups.length), PALETTE.dim),
-          h('span', { style: css.hint }, '通过新建段/新增段保存；可插入到当前会话为常驻或临时段。')),
+          h('span', { style: css.hint }, '通过新建段/新增段保存；可插入到当前会话为常驻段。')),
         h('div', { style: { display: 'flex', gap: '6px', margin: '8px 0' } },
           h('button', {
             style: { ...css.button, ...css.tiny, ...css.primary },
@@ -2268,8 +2302,7 @@ window.__ModuleLoader__.load({
               value: newActivation,
               onChange: (event) => setNewActivation(event.target.value)
             },
-            h('option', { value: 'persistent' }, '默认：常驻'),
-            h('option', { value: 'once' }, '默认：仅下一轮')),
+            h('option', { value: 'persistent' }, '默认：常驻')),
             h('textarea', {
               style: { ...css.textarea, minHeight: '100px' },
               value: newText,
@@ -2996,7 +3029,7 @@ window.__ModuleLoader__.load({
           summary?.completeActive
             ? '当前使用 complete 完整提示词；普通分段装配不进入本轮请求。'
             : summary?.captured
-              ? `身份、persona、计划/团队规则、工具说明等系统指令。覆盖 ${system.overrideCount ?? 0} 个，置空 ${system.emptyCount ?? 0} 个，新增 ${system.extraCount ?? 0} 个，临时 ${system.transientCount ?? 0} 个。`
+              ? `身份、persona、计划/团队规则、工具说明等系统指令。覆盖 ${system.overrideCount ?? 0} 个，置空 ${system.emptyCount ?? 0} 个，新增 ${system.extraCount ?? 0} 个。`
               : '尚未采样到官方基线；请先在「提示词」页打开一次或发一条消息。'),
         card('tools', '工具 schema', `${tools.count ?? 0} 个 · ${tools.visible ?? 0} 可见`,
           `模型本轮可调用的工具定义；${tools.denied ? `本会话关闭 ${tools.denied} 个，` : ''}内容由 DSH 工具注册表提供。`),
@@ -3310,10 +3343,6 @@ window.__ModuleLoader__.load({
         h('div', { style: css.body },
           loading ? h('div', { style: css.hint }, '读取中…') : null,
           !data && !loading && !error ? h('div', { style: css.hint }, '没有数据。') : null,
-          data
-            ? h('div', { style: { ...css.warnNotice, marginBottom: '8px' } },
-              '改动提示词和工具可能会导致缓存命中骤降，越靠前的越明显。')
-            : null,
 
           data && globalView === 'library' ? h(LibraryTab, { sessionId, data, refresh, setError, setToast }) : null,
           data && globalView === 'settings' ? h(SettingsTab, { sessionId, data, refresh, setError, setToast }) : null,

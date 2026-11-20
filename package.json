@@ -1,6 +1,6 @@
 {
   "name": "dsh-prompt-lab",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Per-session system-prompt section editor for DeepSeek Harness with templates, presets, backups, drafts, message appends and tool switches.",
   "license": "MIT",
   "author": "DSH Prompt Lab contributors",

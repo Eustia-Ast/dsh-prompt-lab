@@ -303,82 +303,14 @@ export function apply (ctx, config = {}) {
     }
   }
   const activeTransientTurns = new Map()
+  const lockPending = new Set()
 
-  const transientEntries = (state, sessionId) => (Array.isArray(state.transientSections) ? state.transientSections : [])
-    .filter((entry) => entry && entry.enabled !== false)
-    .filter((entry) => !Number.isFinite(entry.consumedAtTurn))
-    .map((entry) => ({ ...entry, text: store.sectionTextOf(entry, sessionId) }))
+  const transientEntries = () => []
 
-  const markTransientsConsumed = (id, active) => {
-    try {
-      const state = store.stateFor(id)
-      let changed = false
-      for (const entry of active.entries) {
-        const stored = (state.transientSections ?? []).find((item) => item.id === entry.id)
-        if (stored === undefined || Number.isFinite(stored.consumedAtTurn)) continue
-        // A reset/edit during the turn creates a newer revision. Do not consume
-        // the old active snapshot over the user's edited definition.
-        if (entry.updatedAt !== undefined && stored.updatedAt !== entry.updatedAt) continue
-        stored.consumedAtTurn = active.turn
-        changed = true
-      }
-      if (changed && store.hasDraft(id) !== true) store.saveState(id, state)
-    } catch (error) {
-      warnSafely(ctx.logger, `prompt-lab: cannot mark transient sections consumed: ${error?.message ?? error}`)
-    }
-  }
-
-  const finishTransients = (sessionId, agent, consume) => {
-    const id = String(sessionId)
-    const active = activeTransientTurns.get(id)
-    if (active === undefined) return
-    activeTransientTurns.delete(id)
-    try {
-      engine.deactivateTransients(id, agent ?? active.agent)
-    } catch (error) {
-      warnSafely(ctx.logger, `prompt-lab: cannot clear transient sections: ${error?.message ?? error}`)
-    }
-    if (consume === true && active.entered === true) markTransientsConsumed(id, active)
-  }
-
-  const armTransients = (sessionId, agent, turn) => {
-    const id = String(sessionId)
-    if (store.isEnabledFor(id) !== true) {
-      finishTransients(id, agent, false)
-      return
-    }
-    let complete = false
-    try {
-      complete = engine.describe(id).completeActive === true
-    } catch {
-      complete = false
-    }
-    if (complete) {
-      finishTransients(id, agent, false)
-      return
-    }
-    const active = activeTransientTurns.get(id)
-    if (active !== undefined && active.turn === turn) return
-    if (active !== undefined) finishTransients(id, agent, true)
-    const entries = transientEntries(store.stateFor(id), id)
-    if (entries.length === 0) return
-    if (engine.activateTransients(id, agent, entries) === true) {
-      activeTransientTurns.set(id, { agent, turn, entries, entered: false })
-    }
-  }
-
-  const onTransientChanged = (sessionId, transientId) => {
-    const id = String(sessionId)
-    const active = activeTransientTurns.get(id)
-    if (active === undefined) return
-    if (transientId !== undefined && !active.entries.some((entry) => entry.id === transientId)) return
-    activeTransientTurns.delete(id)
-    try {
-      engine.deactivateTransients(id, active.agent)
-    } catch (error) {
-      warnSafely(ctx.logger, `prompt-lab: cannot reset transient registration: ${error?.message ?? error}`)
-    }
-  }
+  const markTransientsConsumed = () => {}
+  const finishTransients = () => {}
+  const armTransients = () => {}
+  const onTransientChanged = () => {}
 
   const readInstructions = (sessionId) => {
     const sid = String(sessionId)
@@ -903,6 +835,75 @@ export function apply (ctx, config = {}) {
 
   const engine = createEngine({ store, logger: ctx.logger, releaseOf, presetOf, isDraftSession })
 
+  const promptLocked = (sessionId) => {
+    const id = String(sessionId)
+    if (store.isLocked(id) || lockPending.has(id)) return true
+    const boundary = turnBoundaryOf(agentOf(id)?.session)
+    if (Number.isFinite(boundary?.lastTurn) && boundary.lastTurn > 0) return true
+    // Plugin reload may run before agent/created. A committed captured state
+    // with no draft still belongs to a started session.
+    try {
+      const state = store.stateFor(id)
+      return state.committed !== false && state.lastCapture !== null && !store.hasDraft(id)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Freeze the prompt reference state once the first user turn is real.
+   * This snapshot is deliberately prompt-only: tool switches and other
+   * mutable session config stay live.
+   */
+  const lockSession = (sessionId, source = 'first-turn') => {
+    const id = String(sessionId)
+    if (store.isLocked(id)) {
+      lockPending.delete(id)
+      store.deleteBackups(id)
+      return true
+    }
+    try {
+      const agent = agentOf(id)
+      const session = agent?.session ?? (() => {
+        try { return lookup('sessions')?.get?.(id) } catch { return undefined }
+      })()
+      const boundary = turnBoundaryOf(session)
+      const firstTurn = Number.isFinite(boundary?.lastTurn) ? boundary.lastTurn : null
+      // Enabling a blank session must not lock it before its first user turn.
+      if (source === 'already-started' && !(firstTurn > 0)) return false
+      const described = engine.describe(id)
+      // Do not freeze a partial state: official overrides need the captured
+      // baseline (the agent/created attach path retries this later).
+      if (described.captured !== true) return false
+      const sections = (described.sections ?? [])
+        .filter((row) => row && ['active', 'extra', 'pending'].includes(row.status))
+        .map((row) => ({
+          name: row.name,
+          status: row.status,
+          mode: row.mode === 'empty' ? 'empty' : 'replace',
+          text: typeof row.text === 'string' ? row.text : '',
+          textId: typeof row.textId === 'string' ? row.textId : null,
+          textLabel: typeof row.textLabel === 'string' ? row.textLabel : null,
+          fragmentId: typeof row.fragmentId === 'string' ? row.fragmentId : null,
+          fragmentLabel: typeof row.fragmentLabel === 'string' ? row.fragmentLabel : null,
+          extraId: typeof row.extraId === 'string' ? row.extraId : null,
+          anchor: typeof row.anchor === 'string' ? row.anchor : null,
+          order: Number.isFinite(row.order) ? row.order : null,
+          source: row.source ?? null,
+          readOnly: row.readOnly === true
+        }))
+      store.saveLockedSnapshot(id, { lockedAt: Date.now(), firstTurn, source, sections })
+      lockPending.delete(id)
+      // Backups cannot be restored after this point.
+      store.deleteBackups(id)
+      engine.sync(id)
+      return true
+    } catch (error) {
+      warnSafely(ctx.logger, `prompt-lab: cannot lock prompt snapshot: ${error?.message ?? error}`)
+      return false
+    }
+  }
+
   /**
    * Finish a draft commit. The baseline is sampled first so an
    * `awaitingBaseline` template never gets written as an unconditional
@@ -945,6 +946,16 @@ export function apply (ctx, config = {}) {
     agentOf,
     releaseOf,
     livenessOf,
+    isPromptLocked: promptLocked,
+    lockSession,
+    purgeSessionData: (sessionId) => {
+      const id = String(sessionId)
+      pendingStore.remove(id)
+      if (store.hasDraft(id)) {
+        try { store.deleteDraft(id) } catch { /* best effort */ }
+      }
+      return store.deleteSessionData(id)
+    },
     isDraftSession,
     toolsList: toolListForApi,
     instructionsOf: readInstructions,
@@ -1016,6 +1027,9 @@ export function apply (ctx, config = {}) {
       if (result.ok !== true) {
         warnSafely(ctx.logger, `prompt-lab: cannot install overrides for this session: ${result.reason}`)
       }
+      // Enabling an already-started session freezes its prompt immediately.
+      const boundary = turnBoundaryOf(agent.session)
+      if (Number.isFinite(boundary?.lastTurn) && boundary.lastTurn > 0) lockSession(sessionId, 'already-started')
       // Never await idle from an agent/created listener. The continuation is
       // scheduled after this creation dispatch, and retried on agent/status.
       scheduleTask(() => { void continuePending(agent, source).catch(() => {}) }, 0)
@@ -1038,25 +1052,27 @@ export function apply (ctx, config = {}) {
     if (event?.type === 'turn/start') {
       const turn = event?.data?.turn
       if (!Number.isFinite(turn)) return
-      armTransients(sessionId, agentOf(sessionId), turn)
+      // Block prompt writes before the first request assembles; the snapshot
+      // itself is finalized after the draft commit in pre-step/step-start.
+      if (turn === 1 && store.isEnabledFor(sessionId) === true) lockPending.add(sessionId)
       return
     }
     if (event?.type === 'step/start') {
-      const active = activeTransientTurns.get(sessionId)
-      if (active !== undefined && active.turn === event?.data?.turn) {
-        active.entered = true
-        // The request is now real; mark one-shot sections used immediately so
-        // the panel reflects it without waiting for the whole turn to finish.
-        markTransientsConsumed(sessionId, active)
-      }
+      if (lockPending.has(sessionId)) lockSession(sessionId, 'first-turn')
     }
   })
 
   ctx.on('agent/pre-step', async (payload, next) => {
     try {
       const sessionId = payload?.agent?.id
+      if (typeof sessionId === 'string' && payload?.turn === 1 && store.isEnabledFor(sessionId) && !store.isLocked(sessionId)) {
+        lockPending.add(sessionId)
+      }
       if (typeof sessionId === 'string' && store.hasDraft(sessionId)) {
         await commitDraftNow(sessionId, payload.agent)
+      }
+      if (typeof sessionId === 'string' && lockPending.has(sessionId)) {
+        lockSession(sessionId, 'first-turn')
       }
     } catch (error) {
       warnSafely(ctx.logger, `prompt-lab: pre-step draft commit failed: ${error?.message ?? error}`)
@@ -1068,7 +1084,6 @@ export function apply (ctx, config = {}) {
     if (status !== 'idle') return
     const sessionId = agent?.id
     if (typeof sessionId !== 'string') return
-    finishTransients(sessionId, agent, true)
     try {
       void continuePending(agent).catch((error) => {
         warnSafely(ctx.logger, `prompt-lab: pending continuation failed: ${error?.message ?? error}`)
@@ -1090,7 +1105,6 @@ export function apply (ctx, config = {}) {
   ctx.on('agent/disposed', ({ agent } = {}) => {
     const sessionId = agent?.id
     if (typeof sessionId !== 'string') return
-    finishTransients(sessionId, agent, true)
     disposeToolRestriction(sessionId)
     engine.detach(sessionId, agent)
     // Do not delete on disposal: a blank window may be archived (recoverable)
