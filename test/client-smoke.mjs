@@ -31,6 +31,12 @@ assert.ok(definition !== null, 'client.js must register a module')
 assert.equal(definition.id, 'dsh-prompt-lab')
 
 const React = {
+  // The Agent preset view defines an error boundary, so the stub needs a base
+  // class; the smoke test never renders it.
+  Component: class Component {
+    constructor (props) { this.props = props }
+    setState () {}
+  },
   createElement () { return {} },
   useState (initial) { return [typeof initial === 'function' ? initial() : initial, () => {}] },
   useEffect () {},

@@ -18,6 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ROUTE, createApi, createHandler } from './lib/api.js'
+import { createAgentPresets } from './lib/agent-presets.js'
 import { createEngine } from './lib/engine.js'
 import { diagnoseProbeError } from './lib/diagnostics.js'
 import { classifySessions } from './lib/liveness.js'
@@ -936,6 +937,21 @@ export function apply (ctx, config = {}) {
     }
   }
 
+  // preset-editor: Agent presets owned by this plugin. Registration needs the
+  // Host's `agentPresets` service, so it is wired below through ctx.inject; the
+  // controller itself only reads/writes the library file.
+  const agentPresetController = createAgentPresets({
+    store,
+    logger: ctx.logger,
+    // The delegation template needs a `dsh-tool-subagent` provider; the Host's
+    // `subagents` service is the only truth, and `null` means "cannot tell".
+    subagentProviders: (names) => {
+      const service = lookup('subagents')
+      if (service === undefined || service === null || typeof service.getProvider !== 'function') return null
+      return names.filter((name) => service.getProvider(name) !== undefined)
+    }
+  })
+
   const api = createApi({
     store,
     engine,
@@ -957,6 +973,7 @@ export function apply (ctx, config = {}) {
       return store.deleteSessionData(id)
     },
     isDraftSession,
+    agentPresets: agentPresetController,
     toolsList: toolListForApi,
     instructionsOf: readInstructions,
     appendUserMessage: appendUserMessage,
@@ -978,12 +995,19 @@ export function apply (ctx, config = {}) {
       writeBootstrapConfig(settings)
       return settings
     },
-    wipeAllData: () => {
+    wipeAllData: async () => {
       const result = store.wipeAll()
       try {
         engine.shutdown()
       } catch {
         /* registrations are best-effort */
+      }
+      // preset-editor: the wiped file is gone from disk, but definitions this
+      // process registered would stay on the Agent roster until a restart.
+      try {
+        await agentPresetController.reset()
+      } catch (error) {
+        warnings.push(`无法撤销 Agent 预设注册：${error?.message ?? error}`)
       }
       // Tool restrictions and pending continuation bookkeeping are held in this
       // plugin, not in the wiped Store. Without this, tools stay denied after a
@@ -1176,6 +1200,18 @@ export function apply (ctx, config = {}) {
   } catch (error) {
     warnSafely(ctx.logger, `prompt-lab: cannot own registrations: ${error?.message ?? error}`)
   }
+
+  // preset-editor: register the stored Agent presets once the Host registry is
+  // available, and unregister them with this plugin. Existing sessions keep the
+  // preset revision they started with; only new sessions pick these up.
+  ctx.inject(['agentPresets'], (presetCtx) => {
+    presetCtx.effect(() => async () => {
+      await agentPresetController.disposeAll()
+    }, 'prompt-lab: agent preset registrations')
+    agentPresetController.attach(presetCtx.agentPresets).catch((error) => {
+      warnSafely(ctx.logger, `prompt-lab: cannot register agent presets: ${error?.message ?? error}`)
+    })
+  })
 
   ctx.inject(['webServer'], (webCtx) => {
     try {

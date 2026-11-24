@@ -1287,6 +1287,788 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // preset-editor: a render error inside the Agent preset view must not blank
+    // the whole Prompt Lab sidebar; surface it in place instead.
+    class AgentPresetBoundary extends React.Component {
+      constructor (props) {
+        super(props)
+        this.state = { error: null }
+      }
+
+      static getDerivedStateFromError (error) {
+        return { error }
+      }
+
+      render () {
+        if (this.state.error !== null) {
+          return h('div', { style: { padding: '12px', color: PALETTE.danger, fontSize: '12px', lineHeight: 1.6 } },
+            `Agent 预设面板渲染失败：${String(this.state.error?.message ?? this.state.error)}`)
+        }
+        return this.props.children
+      }
+    }
+
+    // ------------------------------------------------------ agent preset tab
+    // preset-editor: manages DSH Agent presets registered through the Host's
+    // `agentPresets` service. This is a global view; it never edits the running
+    // session, and existing sessions keep the preset they started with.
+    function AgentPresetTab ({ sessionId, setError, setToast }) {
+      const [state, setState] = useState(null)
+      const [draft, setDraft] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [confirming, setConfirming] = useState(null)
+      const [configEdit, setConfigEdit] = useState(null)
+      const [configText, setConfigText] = useState('')
+      const [configError, setConfigError] = useState(null)
+      const [openRowConfig, setOpenRowConfig] = useState(null)
+      // Rows removed from a copied preset, kept so re-checking restores the
+      // original config instead of the table default.
+      const [removedRows, setRemovedRows] = useState({})
+      const [rowJsonOpen, setRowJsonOpen] = useState(null)
+      const [rowJsonText, setRowJsonText] = useState('')
+      const [rowJsonError, setRowJsonError] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          setState(await call('agentPresets.state', { sessionId }))
+        } catch (error) {
+          setError(String(error.message || error))
+        }
+      }, [sessionId, setError])
+
+      useEffect(() => { load() }, [load])
+
+      const toast = (message) => {
+        if (typeof setToast === 'function') setToast(message)
+      }
+
+      const run = async (work) => {
+        setBusy(true)
+        try {
+          await work()
+        } catch (error) {
+          setError(String(error.message || error))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const startCreate = () => {
+        setOpenRowConfig(null)
+        setRemovedRows({})
+        setDraft({
+          id: '',
+          name: '',
+          description: '',
+          order: 100,
+          enabled: true,
+          complete: false,
+          rows: [],
+          plugins: [],
+          templates: [],
+          rowConfigs: {},
+          prompt: { fragmentIds: [], text: '', suffix: '' }
+        })
+      }
+
+      const startEdit = (preset) => {
+        setOpenRowConfig(null)
+        setRemovedRows({})
+        setDraft({
+          id: preset.id,
+          name: preset.name,
+          description: preset.description,
+          order: preset.order,
+          enabled: preset.enabled,
+          complete: preset.complete === true,
+          rows: [...preset.rows],
+          plugins: Array.isArray(preset.plugins) ? preset.plugins : [],
+          templates: Array.isArray(preset.templates) ? [...preset.templates] : [],
+          rowConfigs: preset.rowConfigs !== undefined ? { ...preset.rowConfigs } : {},
+          prompt: {
+            fragmentIds: [...preset.prompt.fragmentIds],
+            text: preset.prompt.text,
+            suffix: preset.prompt.suffix
+          }
+        })
+      }
+
+      const saveDraft = () => run(async () => {
+        const next = await call('agentPresets.save', { preset: draft })
+        setState(next)
+        setDraft(null)
+        const saved = next?.saved ?? {}
+        toast(saved.registered === true
+          ? `已保存并注册：${saved.id}`
+          : `已保存 ${saved.id}，注册失败：${saved.error ?? '未知原因'}`)
+      })
+
+      const toggle = (preset) => run(async () => {
+        const next = await call('agentPresets.save', { preset: { ...preset, enabled: preset.enabled !== true } })
+        setState(next)
+        toast(preset.enabled === true ? `已停用 ${preset.id}` : `已启用 ${preset.id}`)
+      })
+
+      const remove = (preset) => run(async () => {
+        const next = await call('agentPresets.delete', { id: preset.id })
+        setState(next)
+        setConfirming(null)
+        toast(`已删除 ${preset.id}`)
+      })
+
+      const copyOfficial = (entry) => run(async () => {
+        const next = await call('agentPresets.copy', { id: entry.id })
+        setState(next)
+        const saved = next?.saved ?? {}
+        toast(saved.registered === true
+          ? `已复制为自定义预设：${saved.id}`
+          : `已复制 ${saved.id}，注册失败：${saved.error ?? '未知原因'}`)
+      })
+
+      if (state === null) {
+        return h('div', { style: css.body }, h('div', { style: css.hint }, '读取中…'))
+      }
+
+      // Copied presets carry a complete row list in `plugins`; the catalog
+      // checkbox card is a projection of it: checked means the name is present.
+      // Rows outside the catalog stay in the list, in their original order.
+      const plugins = Array.isArray(draft?.plugins) ? draft.plugins : []
+      const pluginsMode = plugins.length > 0
+      const setPlugins = (next) => setDraft({ ...draft, plugins: next })
+      // Copied rows keep their config on the row itself (not `rowConfigs`), so
+      // field controls edit `plugins[index].config` directly.
+      // `undefined` removes the key: a cleared number field must not persist as
+      // "" (a zod number field would reject it and the preset would mount broken).
+      const setRowConfigRaw = (index, key, value) => setPlugins(plugins.map((row, position) => {
+        if (position !== index) return row
+        const config = { ...(row.config ?? {}) }
+        if (value === undefined) delete config[key]
+        else config[key] = value
+        if (Object.keys(config).length === 0) {
+          const { config: _dropped, ...rest } = row
+          return rest
+        }
+        return { ...row, config }
+      }))
+      const catalogIndex = (name) => plugins.findIndex((row) => row.name === name)
+      const isCatalogChecked = (row) => pluginsMode ? catalogIndex(row.name) >= 0 : draft.rows.includes(row.name)
+      // Unchecking a copied row keeps the original object, so re-checking
+      // restores its config and disabled condition instead of the table default.
+      const toggleCatalogRow = (row, next) => {
+        if (!pluginsMode) {
+          setDraft({ ...draft, rows: next ? [...draft.rows, row.name] : draft.rows.filter((name) => name !== row.name) })
+          return
+        }
+        if (next) {
+          const restored = removedRows[row.name]
+          const entry = restored !== undefined
+            ? restored
+            : { name: row.name, ...(row.config !== undefined && Object.keys(row.config).length > 0 ? { config: { ...row.config } } : {}) }
+          setPlugins([...plugins, entry])
+          const { [row.name]: _restored, ...rest } = removedRows
+          setRemovedRows(rest)
+          return
+        }
+        const index = catalogIndex(row.name)
+        if (index < 0) return
+        setRemovedRows({ ...removedRows, [row.name]: plugins[index] })
+        setPlugins(plugins.filter((_, position) => position !== index))
+      }
+      const removeRow = (index) => {
+        setPlugins(plugins.filter((_, position) => position !== index))
+        setConfigEdit(null)
+        setOpenRowConfig(null)
+      }
+      // A `{ __jsExpr }` disable condition declared by the preset is not a plain
+      // switch: dropping it would mount the row on the other platform too (bash
+      // and pwsh register the same tool name). Only booleans may be toggled.
+      const toggleRow = (index) => {
+        setPlugins(plugins.map((row, position) => {
+          if (position !== index) return row
+          if (row.disabled !== null && typeof row.disabled === 'object') return row
+          const next = { ...row }
+          const disabled = next.disabled !== undefined && next.disabled !== false
+          if (disabled) delete next.disabled
+          else next.disabled = true
+          return next
+        }))
+      }
+      const startConfigEdit = (index) => {
+        setConfigEdit(index)
+        setConfigText(JSON.stringify(plugins[index]?.config ?? {}, null, 2))
+        setConfigError(null)
+      }
+      const applyConfig = () => {
+        if (configEdit === null) return
+        let parsed
+        try {
+          parsed = JSON.parse(configText)
+        } catch (error) {
+          setConfigError(`不是合法 JSON：${String(error.message || error)}`)
+          return
+        }
+        if (parsed === null || typeof parsed !== 'object') {
+          setConfigError('config 必须是 JSON 对象或数组')
+          return
+        }
+        setPlugins(plugins.map((row, position) => position === configEdit ? { ...row, config: parsed } : row))
+        setConfigEdit(null)
+        setConfigError(null)
+      }
+      const fieldStyle = { display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '12px' }
+      const rowStyle = { display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', lineHeight: 1.45 }
+      const rawRowStyle = { borderTop: `1px solid ${PALETTE.line}`, padding: '6px 0' }
+      const monoHint = { display: 'block', fontFamily: PALETTE.mono, fontSize: '11px', color: PALETTE.faint }
+      const inputStyle = { ...css.input }
+
+      const field = (label, control) => h('label', { style: fieldStyle },
+        h('span', { style: { color: PALETTE.dim } }, label),
+        control)
+
+      const textField = (label, value, onChange, extra = {}) => field(label, h('input', {
+        style: inputStyle,
+        value,
+        ...extra,
+        onChange: (event) => onChange(event.target.value)
+      }))
+
+      const cardOf = (preset) => {
+        const templateRows = (preset.templates ?? []).reduce((sum, id) => sum
+          + ((state.templates ?? []).find((template) => template.id === id)?.rows.length ?? 0), 0)
+        const totalRows = (preset.plugins?.length ?? 0) || (preset.rows.length + templateRows)
+        const templateNote = (preset.templates?.length ?? 0) > 0 ? `（含 ${preset.templates.length} 个模板）` : ''
+        // Copied presets keep the whole prompt inside the persona row, so their
+        // `prompt.prefix` is empty; the card must read the row instead.
+        const personaRow = (preset.plugins ?? []).find((row) => row.name === '@deepseek-ai/dsh-persona')
+        const personaText = typeof personaRow?.config?.prefix === 'string' ? personaRow.config.prefix : ''
+        const promptLength = personaText !== '' ? personaText.length : (preset.prompt?.prefix?.length ?? 0)
+        const actions = [
+          h('button', { key: 'edit', style: { ...css.button, ...css.tiny }, disabled: busy, onClick: () => startEdit(preset) }, '编辑'),
+          h('button', { key: 'toggle', style: { ...css.button, ...css.tiny }, disabled: busy, onClick: () => toggle(preset) }, preset.enabled === true ? '停用' : '启用')
+        ]
+        actions.push(confirming === preset.id
+          ? h('button', { key: 'delete', style: { ...css.button, ...css.tiny, ...css.danger }, disabled: busy, onClick: () => remove(preset) }, '确认删除')
+          : h('button', { key: 'delete', style: { ...css.button, ...css.tiny }, disabled: busy, onClick: () => setConfirming(preset.id) }, '删除'))
+        return h('div', { key: preset.id, style: css.card },
+          h('div', { style: css.cardHead },
+            h('strong', { style: { fontSize: '12.5px' } }, preset.name),
+            badge(preset.id, PALETTE.dim),
+            preset.enabled !== true
+              ? badge('已停用', PALETTE.warn)
+              : preset.runtime?.mounted === true ? badge('已挂载', PALETTE.ok) : badge('未挂载', PALETTE.danger)),
+          h('div', { style: css.desc },
+            `order ${preset.order} · 插件行 ${totalRows}${templateNote} · 提示词 ${promptLength} 字`
+            + (preset.description !== '' ? ` · ${preset.description}` : '')),
+          preset.runtime?.broken
+            ? h('div', { style: { ...css.warnNotice, margin: '0 10px 8px' } }, preset.runtime.broken)
+            : null,
+          h('div', { style: { display: 'flex', gap: '6px', padding: '0 10px 10px', flexWrap: 'wrap' } }, actions))
+      }
+
+      // Build the editor only when a draft exists: every element below reads
+      // `draft.*`, so constructing them in list mode throws and blanks the panel.
+      const buildEditor = () => {
+      const identityCard = h('div', { style: css.card },
+        h('div', { style: css.cardHead },
+          h('strong', { style: { fontSize: '12.5px' } }, draft.id === '' ? '新建 Agent 预设' : `编辑 ${draft.id}`),
+          h('span', { style: { flex: 1 } }),
+          h('button', { style: { ...css.button, ...css.tiny }, onClick: () => setDraft(null) }, '取消')),
+        h('div', { style: { padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+          textField('id（小写字母、数字、连字符；保存后不可改）', draft.id, (value) => setDraft({ ...draft, id: value }), {
+            placeholder: 'review',
+            disabled: (state.presets ?? []).some((preset) => preset.id === draft.id)
+          }),
+          textField('名称', draft.name, (value) => setDraft({ ...draft, name: value }), { placeholder: 'Review' }),
+          textField('描述（可空）', draft.description, (value) => setDraft({ ...draft, description: value })),
+          textField('排序（越小越靠前）', draft.order, (value) => setDraft({ ...draft, order: Number(value) }), { type: 'number' })))
+
+      const templateIds = Array.isArray(draft.templates) ? draft.templates : []
+      const shellTemplateOn = templateIds.includes('persistent-shell')
+      const shellRowOn = draft.rows.includes('@deepseek-ai/dsh-tool-bash') || draft.rows.includes('@deepseek-ai/dsh-tool-pwsh')
+
+      // Complete mode: self-built presets carry a flag, copies carry it on the
+      // persona row. Both are edited through the same prompt card.
+      const personaIndex = plugins.findIndex((row) => row.name === '@deepseek-ai/dsh-persona')
+      const personaConfig = personaIndex >= 0 ? (plugins[personaIndex].config ?? {}) : null
+      const copiedComplete = pluginsMode && personaConfig?.complete === true
+      const complete = pluginsMode ? copiedComplete : draft.complete === true
+      const promptText = pluginsMode ? String(personaConfig?.prefix ?? '') : draft.prompt.text
+      const textLimit = state.limits && Number.isFinite(state.limits.text) ? state.limits.text : 50_000
+      const overLimit = promptText.length > textLimit
+      const setPromptText = (value) => {
+        if (!pluginsMode) {
+          setDraft({ ...draft, prompt: { ...draft.prompt, text: value } })
+          return
+        }
+        if (personaIndex < 0) return
+        setRowConfigRaw(personaIndex, 'prefix', value)
+      }
+      const setCompleteMode = (next) => {
+        if (!pluginsMode) {
+          setDraft({ ...draft, complete: next })
+          return
+        }
+        if (personaIndex < 0) return
+        setPlugins(plugins.map((row, position) => {
+          if (position !== personaIndex) return row
+          const config = { ...(row.config ?? {}) }
+          if (next) {
+            config.complete = true
+            config.includeRuntimeContext = false
+          } else {
+            delete config.complete
+            delete config.includeRuntimeContext
+          }
+          const nextRow = { ...row }
+          if (Object.keys(config).length === 0) delete nextRow.config
+          else nextRow.config = config
+          return nextRow
+        }))
+      }
+
+      const rowConfigOf = (row) => (draft.rowConfigs ?? {})[row.name] ?? {}
+      const setRowConfig = (row, key, value) => {
+        const rowConfigs = { ...(draft.rowConfigs ?? {}) }
+        const next = { ...(rowConfigs[row.name] ?? {}) }
+        if (value === undefined) delete next[key]
+        else next[key] = value
+        if (Object.keys(next).length === 0) delete rowConfigs[row.name]
+        else rowConfigs[row.name] = next
+        setDraft({ ...draft, rowConfigs })
+      }
+      // Row config lives on `rowConfigs` for catalog presets and on the plugin
+      // row itself for copies; both paths go through these two accessors.
+      const rowConfigSource = (row) => pluginsMode
+        ? (plugins[catalogIndex(row.name)]?.config ?? {})
+        : rowConfigOf(row)
+      const writeRowConfig = (row, key, value) => pluginsMode
+        ? setRowConfigRaw(catalogIndex(row.name), key, value)
+        : setRowConfig(row, key, value)
+      const effectiveConfig = (row, override = rowConfigOf(row)) => ({ ...(row.config ?? {}), ...override })
+      const initialValue = (row, field, override) => {
+        const source = override ?? rowConfigOf(row)
+        if (Object.prototype.hasOwnProperty.call(source, field.key)) return source[field.key]
+        if (row.config !== undefined && Object.prototype.hasOwnProperty.call(row.config, field.key)) return row.config[field.key]
+        const fallback = field.default
+        if (fallback === null || fallback === undefined) return field.type === 'boolean' ? false : ''
+        if (typeof fallback === 'boolean') return fallback
+        if (typeof fallback === 'number') return Number.isFinite(fallback) ? fallback : ''
+        if (field.type === 'boolean') return String(fallback) === 'true'
+        if (field.type === 'number') {
+          const numeric = Number(String(fallback).replaceAll('_', ''))
+          return Number.isFinite(numeric) ? numeric : ''
+        }
+        // Older tables stored source text (`'legacy'`); strip the quotes.
+        const quoted = String(fallback).match(/^(['"])([\s\S]*)\1$/)
+        return quoted === null ? String(fallback) : quoted[2]
+      }
+      const rowFieldControl = (row, field, override, write) => {
+        const value = initialValue(row, field, override)
+        const label = `${field.key}${field.required ? ' *' : ''}`
+        // The build script records `null` when a default is not a literal; the
+        // control stays empty and points at the docs instead of guessing.
+        const hint = field.desc !== ''
+          ? field.desc
+          : (field.default === null ? '默认值见文档' : '')
+        if (field.type === 'enum' && Array.isArray(field.options) && field.options.length > 0) {
+          return h('label', { key: field.key, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11.5px' } },
+            h('span', { style: { minWidth: '96px' } }, label),
+            h('select', {
+              style: { ...css.input, width: '140px' },
+              value,
+              onChange: (event) => write(field.key, event.target.value)
+            }, field.options.map((option) => h('option', { key: option, value: option }, option))),
+            hint !== '' ? h('span', { style: { color: PALETTE.faint } }, hint) : null)
+        }
+        if (field.type === 'boolean') {
+          return h('label', { key: field.key, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11.5px' } },
+            h('input', { type: 'checkbox', checked: value === true, onChange: (event) => write(field.key, event.target.checked) }),
+            h('span', null, label),
+            hint !== '' ? h('span', { style: { color: PALETTE.faint } }, ` · ${hint}`) : null)
+        }
+        const input = h('input', {
+          style: { ...css.input, width: '88px' },
+          type: field.type === 'number' ? 'number' : 'text',
+          value,
+          onChange: (event) => {
+            const raw = event.target.value
+            if (field.type !== 'number') {
+              write(field.key, raw)
+              return
+            }
+            // Clearing the box removes the key instead of storing "".
+            write(field.key, raw === '' ? undefined : Number(raw))
+          }
+        })
+        return h('label', { key: field.key, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11.5px' } },
+          h('span', { style: { minWidth: '96px' } }, label),
+          input,
+          hint !== '' ? h('span', { style: { color: PALETTE.faint } }, hint) : null)
+      }
+      const rowConfigPanel = (row) => {
+        if (openRowConfig !== row.name) return null
+        if (rowJsonOpen === row.name) {
+          return h('div', { style: { margin: '4px 0 0 22px' } },
+            h('textarea', {
+              style: { ...css.textarea, minHeight: '84px', fontFamily: PALETTE.mono, fontSize: '11px' },
+              value: rowJsonText,
+              spellCheck: false,
+              onChange: (event) => { setRowJsonText(event.target.value); setRowJsonError(null) }
+            }),
+            rowJsonError === null ? null : h('div', { style: { color: PALETTE.danger, fontSize: '11px', marginTop: '3px' } }, rowJsonError),
+            h('div', { style: { display: 'flex', gap: '6px', marginTop: '3px' } },
+              h('button', {
+                style: { ...css.button, ...css.tiny, ...css.primary },
+                onClick: () => {
+                  let parsed
+                  try { parsed = JSON.parse(rowJsonText) } catch (error) {
+                    setRowJsonError(`不是合法 JSON：${String(error.message || error)}`)
+                    return
+                  }
+                  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    setRowJsonError('config 必须是 JSON 对象')
+                    return
+                  }
+                  if (pluginsMode) {
+                    setPlugins(plugins.map((entry) => entry.name === row.name ? { ...entry, config: parsed } : entry))
+                  } else {
+                    setDraft({
+                      ...draft,
+                      rowConfigs: { ...(draft.rowConfigs ?? {}), [row.name]: parsed }
+                    })
+                  }
+                  setRowJsonOpen(null)
+                  setRowJsonError(null)
+                }
+              }, '应用'),
+              h('button', { style: { ...css.button, ...css.tiny }, onClick: () => setRowJsonOpen(null) }, '取消')))
+        }
+        if (row.fields.length === 0) {
+          return h('div', { style: { margin: '4px 0 0 22px', color: PALETTE.faint, fontSize: '11.5px' } }, '该行没有可配置字段。')
+        }
+        return h('div', { style: { margin: '4px 0 0 22px', display: 'flex', flexDirection: 'column', gap: '4px' } },
+          row.fields.map((field) => rowFieldControl(row, field, rowConfigSource(row), (key, value) => writeRowConfig(row, key, value))),
+          h('button', {
+            style: { ...css.button, ...css.tiny, alignSelf: 'flex-start' },
+            onClick: () => {
+              setRowJsonOpen(row.name)
+              setRowJsonText(JSON.stringify(effectiveConfig(row, rowConfigSource(row)), null, 2))
+              setRowJsonError(null)
+            }
+          }, '高级 JSON'))
+      }
+
+      const disabledBadge = (row) => {
+        const disabled = row.disabled !== undefined && row.disabled !== false
+        if (!disabled) return null
+        const expression = row.disabled && typeof row.disabled === 'object' && typeof row.disabled.__jsExpr === 'string'
+        return expression ? badge('条件禁用', PALETTE.warn) : badge('已禁用', PALETTE.warn)
+      }
+      const configEditor = (index) => h('div', { style: { marginTop: '6px' } },
+        h('textarea', {
+          style: { ...css.textarea, minHeight: '96px', fontFamily: PALETTE.mono, fontSize: '11.5px' },
+          value: configText,
+          spellCheck: false,
+          onChange: (event) => { setConfigText(event.target.value); setConfigError(null) }
+        }),
+        configError === null ? null : h('div', { style: { color: PALETTE.danger, fontSize: '11.5px', marginTop: '4px' } }, configError),
+        h('div', { style: { display: 'flex', gap: '6px', marginTop: '4px' } },
+          h('button', { style: { ...css.button, ...css.tiny, ...css.primary }, onClick: applyConfig }, '应用'),
+          h('button', { style: { ...css.button, ...css.tiny }, onClick: () => startConfigEdit(index) }, '恢复原值'),
+          h('button', { style: { ...css.button, ...css.tiny }, onClick: () => { setConfigEdit(null); setConfigError(null) } }, '取消')))
+
+      const groupControls = []
+      let currentGroup = null
+      for (const row of state.catalog ?? []) {
+        if (row.group !== currentGroup) {
+          currentGroup = row.group
+          groupControls.push(h('div', {
+            key: `group-${currentGroup}`,
+            style: { ...css.hint, marginTop: groupControls.length === 0 ? 0 : '6px' }
+          }, currentGroup))
+        }
+        const checked = isCatalogChecked(row)
+        const platformMismatch = row.platform !== undefined && row.platform !== state.platform
+        // Shell/platform conflicts only bind the checkbox editor: a copied row
+        // keeps whatever condition the source declared.
+        const blocked = !pluginsMode && (
+          (shellTemplateOn && (row.name === '@deepseek-ai/dsh-tool-bash' || row.name === '@deepseek-ai/dsh-tool-pwsh'))
+          || (platformMismatch && !checked))
+        const onToggle = (next) => toggleCatalogRow(row, next)
+        const rowChanged = !pluginsMode && Object.keys(rowConfigOf(row)).length > 0
+        groupControls.push(h('div', { key: row.name },
+          h('label', { style: { ...rowStyle, opacity: blocked ? 0.55 : 1 } },
+            h('input', {
+              type: 'checkbox',
+              checked,
+              disabled: blocked,
+              onChange: (event) => onToggle(event.target.checked)
+            }),
+            h('span', null,
+              h('strong', null, row.label),
+              h('span', { style: { color: PALETTE.faint } }, ` · ${row.note}`),
+              row.tools !== undefined && row.tools.length > 0
+                ? h('span', { style: { color: PALETTE.faint } }, ` · ${row.tools.length} 个工具`)
+                : null,
+              h('span', { style: monoHint }, row.name),
+              platformMismatch && !pluginsMode
+                ? h('span', { style: { display: 'block', color: PALETTE.warn, fontSize: '11px' } },
+                  checked ? '当前平台不推荐，可取消勾选' : '当前平台不可用')
+                : null,
+              checked ? h('span', { style: { display: 'block' } }, disabledBadge(row)) : null)),
+          checked && (row.fields !== undefined && row.fields.length > 0)
+            ? h('div', { style: { margin: '2px 0 4px 22px' } },
+              h('button', {
+                style: { ...css.button, ...css.tiny },
+                onClick: () => setOpenRowConfig(openRowConfig === row.name ? null : row.name)
+              }, openRowConfig === row.name ? '收起配置' : `配置${rowChanged ? '（已改）' : ''}`),
+              rowConfigPanel(row))
+            : null))
+      }
+
+      const knownRows = new Set((state.catalog ?? []).map((row) => row.name))
+      // Rows the checkbox card cannot represent: copied personas, groups and
+      // anything outside the whitelist keep their original order at the bottom.
+      const extras = pluginsMode
+        ? plugins.map((row, index) => ({ row, index }))
+          .filter(({ row }) => !knownRows.has(row.name))
+          .filter(({ row }) => !(complete && row.name === '@deepseek-ai/dsh-persona'))
+        : draft.rows.filter((name) => !knownRows.has(name)).map((name) => ({ row: { name }, index: -1 }))
+      const extraControls = extras.length === 0 ? [] : [
+        h('div', { key: 'extra-title', style: { ...css.hint, marginTop: '8px' } },
+          '其它行（按原顺序排在下面；行顺序不影响挂载）'),
+        ...extras.map(({ row, index }) => {
+          const disabled = row.disabled !== undefined && row.disabled !== false
+          const expression = row.disabled && typeof row.disabled === 'object' && typeof row.disabled.__jsExpr === 'string'
+            ? row.disabled.__jsExpr
+            : null
+          const actions = pluginsMode
+            ? [
+                h('button', { key: 'config', style: { ...css.button, ...css.tiny }, onClick: () => startConfigEdit(index) }, '编辑 config'),
+                h('button', {
+                  key: 'toggle',
+                  style: { ...css.button, ...css.tiny, opacity: expression === null ? 1 : 0.5 },
+                  disabled: expression !== null,
+                  title: expression === null ? undefined : '条件禁用来自预设的 !!js 表达式，不能在这里切换；要改请用「编辑 config」',
+                  onClick: () => toggleRow(index)
+                }, disabled ? '启用' : '禁用'),
+                h('button', { key: 'delete', style: { ...css.button, ...css.tiny, ...css.danger }, onClick: () => removeRow(index) }, '删除')
+              ]
+            : [
+                h('button', {
+                  key: 'remove',
+                  style: { ...css.button, ...css.tiny },
+                  onClick: () => setDraft({ ...draft, rows: draft.rows.filter((item) => item !== row.name) })
+                }, '移除')
+              ]
+          return h('div', { key: `${row.name ?? 'row'}-${index}`, style: rawRowStyle },
+            h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+              h('span', { style: { ...monoHint, display: 'inline', flex: 1 } }, `${index >= 0 ? `${index + 1}. ` : ''}${row.name ?? '(未命名行)'}`),
+              row.group === true ? badge('分组', PALETTE.dim) : null,
+              disabledBadge(row),
+              actions),
+            expression === null ? null : h('div', { style: { ...css.hint, marginTop: '2px' } }, `条件：${expression}`),
+            pluginsMode && configEdit === index ? configEditor(index) : null)
+        })
+      ]
+
+      const templateControls = (state.templates ?? []).map((template) => {
+        const checked = templateIds.includes(template.id)
+        const blocked = template.id === 'persistent-shell' && shellRowOn
+        const onToggle = (next) => setDraft({
+          ...draft,
+          templates: next ? [...templateIds, template.id] : templateIds.filter((id) => id !== template.id)
+        })
+        return h('label', {
+          key: template.id,
+          style: { ...rowStyle, opacity: blocked ? 0.55 : 1 }
+        },
+        h('input', {
+          type: 'checkbox',
+          checked,
+          disabled: blocked,
+          onChange: (event) => onToggle(event.target.checked)
+        }),
+        h('span', null,
+          h('strong', null, template.label),
+          h('span', { style: { color: PALETTE.faint } }, ` · ${template.rows.length} 行 · isolate ${Object.keys(template.isolate ?? {}).join(', ') || '无'}`),
+          h('span', { style: monoHint }, template.rows.map((row) => row.name.replace('@deepseek-ai/', '')).join(' / '))))
+      })
+
+      const rowsCard = h('div', { style: css.card },
+        h('div', { style: css.cardHead },
+          h('strong', { style: { fontSize: '12.5px' } },
+            pluginsMode ? `插件行（${plugins.length}）` : `插件行（${draft.rows.length} 行 + ${templateIds.length} 个模板）`)),
+        h('div', { style: { padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: '5px' } },
+          groupControls,
+          extraControls,
+          pluginsMode
+            ? h('div', { style: { ...css.hint, marginTop: '8px' } },
+              '复制来的预设组合固定：上面是与白名单一致的行，勾选会恢复它原本的 config；不能添加组模板。')
+            : h('div', null,
+              h('div', { style: { ...css.hint, marginTop: '6px' } }, '组模板（整组插入，带 isolate）'),
+              templateControls,
+              shellTemplateOn || shellRowOn
+                ? h('div', { style: { ...css.hint, marginTop: '6px', color: PALETTE.warn } },
+                  '「持久 shell」模板与 bash/pwsh 行互斥：两者注册同名工具，不能同时使用。')
+                : null)))
+
+
+      const fragmentControls = (state.fragments ?? []).map((fragment) => {
+        const onToggle = (checked) => setDraft({
+          ...draft,
+          prompt: {
+            ...draft.prompt,
+            fragmentIds: checked
+              ? [...draft.prompt.fragmentIds, fragment.id]
+              : draft.prompt.fragmentIds.filter((id) => id !== fragment.id)
+          }
+        })
+        return h('label', { key: fragment.id, style: rowStyle },
+          h('input', { type: 'checkbox', checked: draft.prompt.fragmentIds.includes(fragment.id), onChange: (event) => onToggle(event.target.checked) }),
+          h('span', null,
+            h('strong', null, fragment.label),
+            h('span', { style: { display: 'block', color: PALETTE.faint, fontSize: '11.5px' } }, fragment.preview)))
+      })
+
+      const promptBody = fragmentControls.length === 0
+        ? h('div', { style: css.hint }, '片段库为空。先到「文本管理」保存片段，再回来引用。')
+        : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } }, fragmentControls)
+
+      const promptCard = h('div', { style: css.card },
+        h('div', { style: css.cardHead },
+          h('strong', { style: { fontSize: '12.5px' } },
+            complete
+              ? (pluginsMode ? '完整提示词（来自 persona 行）' : '完整提示词（整篇替换）')
+              : '提示词（来自片段库）')),
+        h('div', { style: { padding: '0 10px 10px' } },
+          h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '12px', marginBottom: '8px' } },
+            h('input', {
+              type: 'checkbox',
+              checked: complete,
+              disabled: pluginsMode && personaIndex < 0,
+              onChange: (event) => setCompleteMode(event.target.checked)
+            }),
+            h('span', null, pluginsMode
+              ? (personaIndex < 0
+                  ? '当前副本没有 persona 行，不能使用完整提示词'
+                  : '完整提示词：整篇替换（写回该副本的 persona 行）')
+              : '完整提示词：整篇替换，不使用片段与分段')),
+          complete
+            ? h('div', { style: css.hint }, pluginsMode
+                ? '整篇正文写回 persona.config.prefix；底部的 persona config 可以改其它设置。'
+                : '新会话的系统提示词只有这一整篇；工具行照常挂载。')
+            : promptBody,
+          h('textarea', {
+            style: { ...css.textarea, marginTop: '8px', minHeight: complete ? '200px' : '72px' },
+            value: promptText,
+            placeholder: complete ? '整篇系统提示词正文' : '追加在片段之后的提示词（可选）',
+            onChange: (event) => setPromptText(event.target.value)
+          }),
+          h('div', { style: { ...css.hint, marginTop: '4px', color: overLimit ? PALETTE.danger : PALETTE.dim } },
+            `${promptText.length} / ${textLimit} 字${overLimit ? '：超出上限，保存会被拒绝' : ''}`),
+          pluginsMode && complete && personaIndex >= 0
+            ? h('div', { style: { marginTop: '6px' } },
+              h('button', {
+                style: { ...css.button, ...css.tiny },
+                onClick: () => {
+                  if (configEdit === personaIndex) {
+                    setConfigEdit(null)
+                    setConfigError(null)
+                    return
+                  }
+                  startConfigEdit(personaIndex)
+                }
+              }, configEdit === personaIndex ? '收起 persona config' : 'persona config（JSON）'),
+              configEdit === personaIndex ? configEditor(personaIndex) : null)
+            : null,
+          h('div', { style: { ...css.hint, marginTop: '6px' } },
+            complete
+              ? (pluginsMode
+                  ? '勾选会写 complete: true、includeRuntimeContext: false；取消勾选会删掉这两个键。'
+                  : '保存时写入 persona 行：prefix = 正文，complete = true，includeRuntimeContext = false。')
+              : '保存时把选中的片段按顺序拼成 dsh-persona 的 prefix；片段正文改动后，回到这里再保存一次即可同步。')))
+
+      const actions = h('div', { style: { display: 'flex', gap: '6px', paddingBottom: '12px' } },
+        h('button', { style: { ...css.button, ...css.primary }, disabled: busy || overLimit, onClick: saveDraft }, busy ? '保存中…' : '保存'),
+        h('button', { style: css.button, disabled: busy, onClick: () => setDraft(null) }, '取消'))
+
+      // L1+L2: copied presets expose their row list for editing. The package
+      // name stays as copied; order, enabled state, deletion and the JSON
+      // config are editable here, and catalog rows can be appended.
+      const editorBody = h('div', null,
+        identityCard,
+        rowsCard,
+        (!pluginsMode || complete) ? promptCard : null,
+        actions)
+        return editorBody
+      }
+
+      const editor = draft === null ? null : buildEditor()
+
+      const listBody = (state.presets ?? []).length === 0
+        ? h('div', { style: css.hint }, '还没有自定义 Agent 预设。')
+        : (state.presets ?? []).map(cardOf)
+
+      const header = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', paddingBottom: '8px', flexWrap: 'wrap' } },
+        h('strong', { style: { fontSize: '12.5px' } }, `已保存 ${(state.presets ?? []).length}/${state.limit ?? 0}`),
+        h('span', { style: { flex: 1 } }),
+        h('button', {
+          style: { ...css.button, ...css.tiny, ...css.primary },
+          disabled: busy || (state.presets ?? []).length >= (state.limit ?? 0),
+          onClick: startCreate
+        }, '新建'))
+
+      const notes = h('div', { style: { ...css.hint, paddingBottom: '8px' } },
+        '内置预设由 DSH 提供，只能选用、不能在这里覆盖；这里只管理本插件注册的预设。')
+
+      const officialEntries = Array.isArray(state.official) ? state.official : []
+      const officialBody = officialEntries.length === 0
+        ? null
+        : h('div', { style: { ...css.card, marginTop: '10px' } },
+          h('div', { style: css.cardHead },
+            h('strong', { style: { fontSize: '12.5px' } }, '其它预设'),
+            h('span', { style: { flex: 1 } }),
+            h('span', { style: css.hint }, '只读，可复制为自定义')),
+          h('div', { style: { padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: '6px' } },
+            officialEntries.map((entry) => h('div', {
+              key: entry.id,
+              style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
+            },
+            h('strong', { style: { fontSize: '12.5px' } }, entry.name),
+            badge(entry.id, PALETTE.dim),
+            entry.order === null ? null : h('span', { style: css.hint }, `order ${entry.order}`),
+            entry.broken === null ? null : badge('不可用', PALETTE.danger),
+            h('span', { style: { flex: 1 } }),
+            h('button', {
+              style: { ...css.button, ...css.tiny },
+              disabled: busy,
+              onClick: () => copyOfficial(entry)
+            }, '复制为自定义')))))
+
+      const schemaStatus = state.schemaStatus ?? {}
+      const staleTable = schemaStatus.stale === true
+        ? h('div', { style: css.warnNotice },
+          `行配置表按 DSH ${schemaStatus.table} 生成，与当前安装 ${schemaStatus.current} 不一致；行字段与默认值可能不准，可用「高级 JSON」手动改。`)
+        : null
+
+      const unsupported = state.supported !== true
+        ? h('div', { style: css.warnNotice }, '当前 DSH 没有 agentPresets 服务：预设可以编辑保存，但不会注册到名册。')
+        : null
+
+      const failures = (state.failures ?? []).length > 0
+        ? h('div', { style: css.warnNotice }, `注册失败：${state.failures.map((item) => `${item.id} — ${item.error}`).join('；')}`)
+        : null
+
+      return h('div', { style: css.body },
+        staleTable,
+        h('div', { style: css.notice },
+          'Agent 预设决定新会话挂载哪些插件行、使用什么人格提示词；与「预设」页（当前会话的提示词覆盖）无关。已经开启的会话不会改变，新会话才会使用。'),
+        unsupported,
+        failures,
+        editor !== null ? editor : h('div', null, header, notes, listBody, officialBody))
+    }
+
     // ----------------------------------------------------------- preset tab
     function PresetTab ({ sessionId, data, refresh, setError, setToast }) {
       const locked = data.session.locked === true
@@ -3179,6 +3961,35 @@ window.__ModuleLoader__.load({
               ? h('span', { style: { ...css.tag, color: PALETTE.warn } }, '草稿')
               : null,
             h('span', { style: { flex: 1 } }),
+            // preset-editor: Agent presets sit left of 文本管理.
+            data
+              ? h('button', {
+                style: {
+                  ...css.button,
+                  padding: '6px 10px',
+                  fontSize: '13px',
+                  minHeight: '30px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  ...(globalView === 'agentPresets' ? css.primary : {})
+                },
+                title: '管理本机注册的 Agent 预设；新会话生效',
+                onClick: () => setGlobalView(globalView === 'agentPresets' ? null : 'agentPresets')
+              },
+              h('svg', {
+                viewBox: '0 0 16 16',
+                width: 14,
+                height: 14,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.4,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round'
+              },
+              h('path', { d: 'M3 13V6.5M8 13V3M13 13V8.5' })),
+              'Agent 预设')
+              : null,
             data
               ? h('button', {
                 style: {
@@ -3312,7 +4123,7 @@ window.__ModuleLoader__.load({
             globalView
               ? [
                 h('span', { key: 'global', style: { ...css.tab, ...css.tabActive, cursor: 'default' } },
-                  globalView === 'library' ? '文本管理（全局）' : '设置（全局）'),
+                  globalView === 'library' ? '文本管理（全局）' : globalView === 'agentPresets' ? 'Agent 预设（全局）' : '设置（全局）'),
                 h('span', { key: 'flex', style: { flex: 1 } }),
                 h('button', {
                   key: 'back',
@@ -3345,6 +4156,7 @@ window.__ModuleLoader__.load({
           !data && !loading && !error ? h('div', { style: css.hint }, '没有数据。') : null,
 
           data && globalView === 'library' ? h(LibraryTab, { sessionId, data, refresh, setError, setToast }) : null,
+          data && globalView === 'agentPresets' ? h(AgentPresetBoundary, null, h(AgentPresetTab, { sessionId, data, refresh, setError, setToast })) : null,
           data && globalView === 'settings' ? h(SettingsTab, { sessionId, data, refresh, setError, setToast }) : null,
           data && !globalView && tab === 'prompt' ? h(PromptTab, { sessionId, data, refresh, setError, setToast }) : null,
           data && !globalView && tab === 'capabilities' ? h(CapabilityTab, { sessionId, data, refresh, setError, setToast }) : null,

@@ -22,6 +22,20 @@ Prompt Lab 是一个 DeepSeek Harness（DSH）插件。打开一个会话的 Pro
 - **完整提示词识别**：如果当前 preset 使用 `complete` 整篇提示词，面板会明确提示分段编辑不生效。
 - **工具开关**：按会话关闭 global 工具，并同步隐藏对应的 `tool:<name>` 提示词段；agent preset/scoped 工具仍由 preset 控制。
 - **敏感、越级项只读**：展示 AGENTS/CLAUDE 指令文件、工具列表和当前装配结构，不修改这些来源。
+- **Agent 预设**：在「Agent 预设」页（面板右上角，位于「文本管理」左侧）新建/编辑/停用/删除本机注册的预设；提示词部分直接引用片段库，保存时物化为 `dsh-persona` 的前缀。详见下文。
+
+## Agent 预设（本机扩展）
+
+DSH 的 Agent 预设是一个普通 loader 行，插件是 `@deepseek-ai/dsh-agent-preset`，本质是 `ctx.agentPresets.register(definition)`。Prompt Lab 用同一个公开接口注册自己的预设，因此**不需要为每个预设装 bundle，也不写 profile patch**：定义保存在 `<dataDir>/library/agent-presets.json`，Host 每次启动时重新注册。
+
+- 入口：面板头部「Agent 预设」按钮（在「文本管理」左边），全局视图，与当前会话无关。
+- 可编辑：id / 名称 / 描述 / 排序 / 插件行（白名单内的随 DSH 发布包）/ 提示词（从片段库选择，可追加正文）。
+- 生效范围：**只影响新会话**；已开启的会话保持它启动时的 preset，不会被改写，也没有“应用到当前会话”。
+- 运行时状态：卡片上的「已挂载 / 未挂载」和 `broken` 原文来自 registry 的实际装配结果。
+- 内置 `standard / ptc / minimal / cordis` 只读：注册接口只拒绝“此刻已在名册里”的 id，先注册的行会赢，所以编辑器静态拒绝这四个 id，避免顶掉内置预设。
+- 手动添加的插件行只允许随 DSH 发布的包；复制官方预设时行名原样保留（若包含 profile 包，该行只能 JSON 编辑）。片段正文按所选顺序用空行拼接成 `dsh-persona` 的 `prefix`。
+- 数据随 `wipeAll` 一起清除；停用插件时注册随 Cordis effect 一起撤掉。
+
 
 ## 安装
 
@@ -148,6 +162,7 @@ client.js             Web 面板
 lib/engine.js         section 注册与装配采样
 lib/store.js          数据存储
 lib/api.js            JSON API
+lib/agent-presets.js  Agent 预设的存储、校验与运行时注册
 lib/migrate.js        数据目录迁移
 lib/pending.js        重启锁
 lib/liveness.js       会话状态分类
