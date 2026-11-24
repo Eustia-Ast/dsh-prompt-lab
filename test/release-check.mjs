@@ -282,6 +282,36 @@ async function invoke (handler, { method = 'POST', url = ROUTE, headers = {}, bo
   assert.deepEqual(ok.body, { ok: true, value: { echo: 'state.get' } })
 }
 
+// ------------------------------------------- DSH access check (connection)
+{
+  const base = { 'content-type': 'application/json', host: '127.0.0.1:1', origin: 'http://127.0.0.1:1' }
+  const rejections = new Map([['none', undefined], ['unauth', 401], ['forbidden', 403]])
+  const connection = { requestRejection: (request) => rejections.get(request.headers['x-probe']) }
+  const guarded = createHandler({ handle: async (body) => ({ echo: body.op }) }, null, {
+    getConnection: () => connection
+  })
+  const call = (probe) => invoke(guarded, {
+    headers: { ...base, 'x-probe': probe },
+    body: JSON.stringify({ op: 'state.get' })
+  })
+  assert.equal((await call('none')).status, 200, 'an admitted request passes')
+  assert.equal((await call('unauth')).status, 401, 'a 401 from Connection is forwarded')
+  assert.equal((await call('forbidden')).status, 403, 'a 403 from Connection is forwarded')
+
+  const throwing = createHandler({ handle: async () => ({}) }, null, {
+    getConnection: () => ({ requestRejection: () => { throw new Error('boom') } })
+  })
+  assert.equal((await invoke(throwing, { headers: base, body: '{}' })).status, 403,
+    'a throwing access check fails closed')
+
+  // Older Host without the service: the plugin's own loopback/Origin fence still runs.
+  const legacy = createHandler({ handle: async (body) => ({ echo: body.op }) }, null, {
+    getConnection: () => null
+  })
+  assert.equal((await invoke(legacy, { headers: base, body: JSON.stringify({ op: 'state.get' }) })).status, 200,
+    'no connection service keeps the previous behaviour')
+}
+
 // --------------------------------------------------- API name collision guard
 {
   const dir = tempDir('api')

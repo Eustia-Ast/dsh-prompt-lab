@@ -102,6 +102,7 @@ Prompt Lab 能改变 Agent 看到的内容，因此请把它当作**高权限的
 
 面板通过 DSH Web server 上的同源路由 `/prompt-lab/api` 读写配置。该接口：
 
+- 每个写请求先经过 DSH 的 `connection.requestRejection`：Host/Origin 栅栏加浏览器会话认证，未通过返回 401/403；没有 `connection` 服务的旧宿主退回下面的本地校验；
 - 写请求必须是 `application/json`；带 `Origin` 时会校验它必须与 loopback Host 同源；
 - 某些 DSH 宿主在同源 POST 上不发送 `Origin`，此时仍要求 loopback 客户端、loopback Host，并校验存在时的 `Sec-Fetch-Site`；
 - 非本机网络客户端、非 loopback Host、`null` Origin 和跨站 `Sec-Fetch-Site` 会被拒绝；
@@ -146,7 +147,7 @@ Prompt Lab 能改变 Agent 看到的内容，因此请把它当作**高权限的
 
 ## 开发
 
-仓库没有运行时 npm 依赖。
+仓库没有运行时 npm 依赖。官方预设声明的 YAML 解析使用 `lib/vendor/js-yaml.mjs`（vendored 的 js-yaml 4.3.2 单文件，MIT），不通过 npm 安装。
 
 ```sh
 npm test
@@ -163,6 +164,7 @@ lib/engine.js         section 注册与装配采样
 lib/store.js          数据存储
 lib/api.js            JSON API
 lib/agent-presets.js  Agent 预设的存储、校验与运行时注册
+lib/vendor/           vendored 依赖（js-yaml 单文件）
 lib/migrate.js        数据目录迁移
 lib/pending.js        重启锁
 lib/liveness.js       会话状态分类

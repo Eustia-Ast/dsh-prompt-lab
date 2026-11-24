@@ -1219,7 +1219,19 @@ export function apply (ctx, config = {}) {
         () => webCtx.webServer.register({
           kind: 'prefix',
           path: ROUTE,
-          handler: createHandler(api, ctx.logger)
+          handler: createHandler(api, ctx.logger, {
+            // Resolved per request so a Host that activates `connection` after
+            // this route still gets DSH's access check; older Hosts return
+            // undefined and keep the plugin's own loopback/Origin fence.
+            getConnection: () => {
+              try {
+                const connection = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+                return connection === undefined ? null : connection
+              } catch {
+                return null
+              }
+            }
+          })
         }),
         'prompt-lab: api route'
       )

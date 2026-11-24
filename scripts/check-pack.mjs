@@ -30,7 +30,8 @@ const required = [
   'CHANGELOG.md',
   'icon.png',
   'assets/icon-180.png',
-  'lib/path-guard.js'
+  'lib/path-guard.js',
+  'lib/vendor/js-yaml.mjs'
 ]
 const missing = required.filter((name) => !names.has(name))
 const forbidden = files

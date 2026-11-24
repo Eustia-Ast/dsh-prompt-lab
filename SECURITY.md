@@ -6,6 +6,8 @@ Prompt Lab 是一个本机、单用户的 DeepSeek Harness 插件。它可以改
 
 首轮对话开始后，提示词配置会被锁定；锁定会话使用提示词快照，不再接受改写、新增、恢复或预设应用。
 
+本地 API 的每个写请求先经过 DSH Connection 的 `requestRejection`：Host/Origin 栅栏加浏览器会话认证，未认证请求返回 401/403；只有通过这些检查后，才继续做 loopback 客户端、loopback Host、JSON 内容类型与 `Origin`/`Sec-Fetch-Site` 校验。没有 `connection` 服务的旧宿主会退回这项本地校验。
+
 ## 报告问题
 
 请不要开公开 issue。请使用 GitHub 仓库的 **Security → Report a vulnerability** 私下报告，并附上：
