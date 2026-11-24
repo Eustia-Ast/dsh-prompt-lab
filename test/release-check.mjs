@@ -381,7 +381,6 @@ async function invoke (handler, { method = 'POST', url = ROUTE, headers = {}, bo
       name: 'with text',
       fragmentIds: [],
       extras: [{ name: 'custom:note', anchor: '__end__', order: 0, textId: id }],
-      transientSections: [],
       toolPolicy: { allow: null, deny: [] },
       updatedAt: Date.now()
     }]

@@ -343,21 +343,12 @@ assert.equal(idleEnabled.value.session.draft, true)
 assert.equal(fs.existsSync(path.join(dir, 'drafts', `${idleId}.json`)), true)
 assert.equal(fs.existsSync(path.join(dir, 'sessions', idleId, 'state.json')), false)
 
-// Transient sections were removed in 1.1.0. The old API must reject them.
-const transientAgent = makeAgent('session-wire-transient')
-boundaries.set(transientAgent.session, { openTurnStartSeq: 1, lastTurn: 1 })
-live.set(transientAgent.id, transientAgent)
-await listeners.get('agent/created')[0]({ agent: transientAgent })
-await req('session.set', { sessionId: transientAgent.id, enabled: true })
-const transientRejected = await req('transient.save', {
-  sessionId: transientAgent.id,
-  name: 'custom:once',
-  anchor: '__end__',
-  text: 'ONCE_SECTION',
-  activation: 'once'
-})
-assert.equal(transientRejected.ok, false)
-assert.match(transientRejected.error, /已移除临时段/)
+// A live session used by the AGENTS read-only check below.
+const instructionsAgent = makeAgent('session-wire-instructions')
+boundaries.set(instructionsAgent.session, { openTurnStartSeq: 1, lastTurn: 1 })
+live.set(instructionsAgent.id, instructionsAgent)
+await listeners.get('agent/created')[0]({ agent: instructionsAgent })
+await req('session.set', { sessionId: instructionsAgent.id, enabled: true })
 
 // List messages and append a user message to the live session.
 const messageAgent = makeAgent('session-wire-messages')
@@ -438,8 +429,8 @@ boundaries.set(messageAgent.session, { openTurnStartSeq: 1, lastTurn: 1 })
 // AGENTS files are exposed read-only from the session cwd.
 const instructionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plab-agents-'))
 fs.writeFileSync(path.join(instructionsDir, 'AGENTS.md'), 'workspace instructions')
-transientAgent.session.header = { cwd: instructionsDir }
-const instructions = await req('agents.read', { sessionId: transientAgent.id })
+instructionsAgent.session.header = { cwd: instructionsDir }
+const instructions = await req('agents.read', { sessionId: instructionsAgent.id })
 assert.equal(instructions.value.ok, true)
 assert.ok(instructions.value.files.some((file) => file.text.includes('workspace instructions')))
 
@@ -450,5 +441,5 @@ const health = await routes[0].handler(
 )
 assert.equal(health, undefined)
 
-assert.ok(logs.every((message) => /只读|锁定|已移除临时段/.test(message)))
+assert.ok(logs.every((message) => /只读|锁定/.test(message)))
 console.log('host wiring checks passed')

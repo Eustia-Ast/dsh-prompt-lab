@@ -485,8 +485,7 @@ window.__ModuleLoader__.load({
         orphan: { label: '失效', color: PALETTE.danger },
         blocked: { label: '不生效', color: PALETTE.faint },
         unknown: { label: '未捕获', color: PALETTE.dim },
-        extra: { label: '新增', color: PALETTE.accent },
-        transient: { label: '临时段', color: PALETTE.accent }
+        extra: { label: '新增', color: PALETTE.accent }
       }
     }
 
@@ -633,7 +632,6 @@ window.__ModuleLoader__.load({
       const [newName, setNewName] = useState('custom:note')
       const [newAnchor, setNewAnchor] = useState('__end__')
       const [newText, setNewText] = useState('')
-      const [newActivation, setNewActivation] = useState('persistent')
       const [collapseReadOnly, setCollapseReadOnly] = useState(() => {
         try {
           return window.localStorage.getItem('prompt-lab:collapse-readonly') === '1'
@@ -673,14 +671,13 @@ window.__ModuleLoader__.load({
       const rows = data.prompt.sections
       const locked = data.session.locked === true
       // Count what is actually assembled, not what is saved: a suspended
-      // override contributes its official text, an inactive transient
-      // contributes nothing, and a suppressed tool section is empty.
+      // override contributes its official text, and a suppressed tool section
+      // is empty.
       const effectiveTokens = (row) => {
         if (row?.toolSuppressed === true) return 0
         if (row?.status === 'active') return Number(row.tokens) || 0
         if (row?.status === 'suspended' || row?.status === 'pending') return Number(row.officialTokens) || 0
         if (row?.status === 'extra') return Number(row.tokens) || 0
-        if (row?.status === 'transient') return row.active === true ? Number(row.tokens) || 0 : 0
         if (row?.status === 'official') return Number(row.officialTokens) || 0
         return 0
       }
@@ -707,7 +704,6 @@ window.__ModuleLoader__.load({
       const blockedRows = rows.filter((row) =>
         row.status === 'blocked' ||
         row.status === 'extra' ||
-        row.status === 'transient' ||
         (row.status !== 'official' && row.name === complete.sectionName))
       const delta = data.prompt.delta ?? null
       const added = Array.isArray(delta?.added) ? delta.added : []
@@ -720,7 +716,7 @@ window.__ModuleLoader__.load({
         majorMinor(release.version) !== majorMinor(release.classifiedAgainst)
 
       const open = (row) => {
-        const canEmpty = row.status !== 'extra' && row.status !== 'transient'
+        const canEmpty = row.status !== 'extra'
         setEditing(row.name)
         setMode(canEmpty && row.mode === 'empty' ? 'empty' : 'replace')
         setValue(canEmpty && row.mode === 'empty' ? '' : row.text)
@@ -743,18 +739,7 @@ window.__ModuleLoader__.load({
               order: row.order,
               text: mode === 'empty' ? '' : value
             })
-            : row.status === 'transient'
-              ? await call('transient.save', {
-                sessionId,
-                id: row.transientId,
-                name: row.name,
-                anchor: row.anchor,
-                order: row.order,
-                activation: row.activation,
-                enabled: row.enabled,
-                text: mode === 'empty' ? '' : value
-              })
-              : await call('fragment.save', {
+            : await call('fragment.save', {
               sessionId,
               key: row.name,
               mode,
@@ -834,7 +819,7 @@ window.__ModuleLoader__.load({
       }
 
       const renderEditor = (row) => {
-        const canEmpty = row.status !== 'extra' && row.status !== 'transient'
+        const canEmpty = row.status !== 'extra'
         return h('div', { style: css.editor },
         h('div', { style: { ...css.hint, marginBottom: '6px' } },
           `正在编辑 `, h('code', { style: { fontFamily: PALETTE.mono } }, row.name),
@@ -861,7 +846,7 @@ window.__ModuleLoader__.load({
           : h('div', { style: { ...css.hint, padding: '8px 0' } }, '保存后这一段从提示词中消失。'),
         h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', flexWrap: 'wrap' } },
           h('button', { style: { ...css.button, ...css.primary }, disabled: busy, onClick: () => save(row) }, busy ? '保存中…' : '保存'),
-          row.status === 'extra' || row.status === 'transient' ? null : h('button', { style: css.button, disabled: busy, onClick: () => setSaveAsOpen((open) => !open) }, saveAsOpen ? '收起另存' : '另存为模板'),
+          row.status === 'extra' ? null : h('button', { style: css.button, disabled: busy, onClick: () => setSaveAsOpen((open) => !open) }, saveAsOpen ? '收起另存' : '另存为模板'),
           h('button', { style: css.button, onClick: () => setEditing(null) }, '取消'),
           h('button', { style: css.button, onClick: () => setShowDiff((v) => !v) }, showDiff ? '收起对比' : '对比原文'),
           h('span', { style: { flex: 1 } }),
@@ -889,7 +874,6 @@ window.__ModuleLoader__.load({
 
       const removeBlocked = (row) => {
         if (row.status === 'extra') return run(call('extra.delete', { sessionId, id: row.extraId }))
-        if (row.status === 'transient') return run(call('transient.delete', { sessionId, id: row.transientId }))
         return run(call('override.clear', { sessionId, key: row.name }))
       }
 
@@ -954,8 +938,8 @@ window.__ModuleLoader__.load({
                     h('div', { style: css.cardHead },
                       h('span', { style: css.name, title: row.name }, row.name),
                       badge(
-                        row.status === 'extra' ? '新增段' : row.status === 'transient' ? '临时段' : '覆盖',
-                        row.status === 'extra' || row.status === 'transient' ? PALETTE.accent : PALETTE.warn
+                        row.status === 'extra' ? '新增段' : '覆盖',
+                        row.status === 'extra' ? PALETTE.accent : PALETTE.warn
                       ),
                       h('span', { style: { ...css.hint, marginLeft: 'auto' } }, tok(row.tokens))),
                     h('div', { style: { ...css.desc, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, row.text || '（空）'),
@@ -1174,10 +1158,7 @@ window.__ModuleLoader__.load({
               ? null
               : badge(STATUS[row.status]?.label || row.status, STATUS[row.status]?.color),
             readOnly ? badge('只读', PALETTE.faint) : null,
-            row.status === 'transient' ? badge('仅下一轮', PALETTE.accent) : null,
             row.textId ? badge(`文本库${row.textLabel ? `：${row.textLabel}` : ''}`, PALETTE.accent) : null,
-            row.status === 'transient' && row.consumedAtTurn !== null ? badge('已使用', PALETTE.warn) : null,
-            row.status === 'transient' && row.enabled === false ? badge('已关闭', PALETTE.faint) : null,
             row.toolSuppressed ? badge('工具已关', PALETTE.warn) : null,
             completeActive ? badge('不生效', PALETTE.faint) : null,
             h('span', { style: { ...css.hint, marginLeft: 'auto' } }, tok(row.tokens))),
@@ -1191,13 +1172,12 @@ window.__ModuleLoader__.load({
               row.status === 'pending' ? '　尚未采样到官方基线，首次对话后重新校验。' : '',
               row.status === 'active' && row.applied === false && !completeActive ? '　注册未生效（可能被同一 agent 作用域的其他插件占用了同名段）。' : '',
               row.status === 'orphan' ? '　官方已没有这一段，可以转成新增段继续用。' : '',
-              row.status === 'extra' || row.status === 'transient'
+              row.status === 'extra'
                 ? `　跟随位置：${row.anchor === '__start__' ? '整篇最前' : row.anchor === '__end__' ? '整篇最后' : `在 ${row.anchor} 之后`}${row.anchorMissing ? '（原锚点已不存在，暂排在最后）' : ''}`
                 : '',
-              row.status === 'transient' ? `　激活方式：仅下一轮${row.consumedAtTurn !== null ? `；已在第 ${row.consumedAtTurn} 轮使用` : ''}。` : '',
               row.source === 'plugin' && row.sensitivity === null ? '　内容由插件提供，未审核；风险无法从段名判断，改动前请先看原文。' : '',
               completeActive ? '　本会话使用完整提示词，分段编辑不生效。' : ''),
-          !locked && !collapsed && !readOnly && row.status !== 'extra' && row.status !== 'transient' && templates.length > 0
+          !locked && !collapsed && !readOnly && row.status !== 'extra' && templates.length > 0
             ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '0 10px 8px', flexWrap: 'wrap' } },
               h('span', { style: css.hint }, '模板'),
               h('select', {
@@ -1229,30 +1209,6 @@ window.__ModuleLoader__.load({
                 onClick: () => run(call('extra.save', { sessionId, name: row.name, anchor: '__end__', text: row.text })
                   .then(() => call('override.clear', { sessionId, key: row.name })))
               }, '转为新增段')
-              : null,
-            row.status === 'transient'
-              ? h('button', {
-                style: { ...css.button, ...css.tiny },
-                onClick: () => run(call('transient.toggle', { sessionId, id: row.transientId, enabled: !row.enabled }))
-              }, row.enabled === false ? '启用' : '关闭')
-              : null,
-            row.status === 'transient' && row.consumedAtTurn !== null
-              ? h('button', {
-                style: { ...css.button, ...css.tiny },
-                onClick: () => run(call('transient.save', {
-                  sessionId,
-                  id: row.transientId,
-                  name: row.name,
-                  anchor: row.anchor,
-                  order: row.order,
-                  activation: row.activation,
-                  enabled: true,
-                  text: row.text
-                }))
-              }, '重制')
-              : null,
-            row.status === 'transient'
-              ? h('button', { style: { ...css.button, ...css.tiny, ...css.danger }, onClick: () => run(call('transient.delete', { sessionId, id: row.transientId })) }, '删除')
               : null,
             !locked && row.status === 'extra'
               ? h('button', { style: { ...css.button, ...css.tiny }, onClick: () => run(call('extra.move', { sessionId, id: row.extraId, delta: -1 })) }, '↑')
@@ -2126,7 +2082,7 @@ window.__ModuleLoader__.load({
             ? badge(currentModified ? '手工配置' : '未保存配置', PALETTE.warn)
             : badge('未设置', PALETTE.dim)
       const currentCount = (current?.overrideCount ?? 0) + (current?.extraCount ?? 0) +
-        (current?.transientCount ?? 0) + (current?.toolDenyCount ?? 0)
+        (current?.toolDenyCount ?? 0)
       const canResetPreset = currentSource !== 'none' || currentCount > 0
 
       return h('div', null,
@@ -2603,10 +2559,6 @@ window.__ModuleLoader__.load({
       unknown: '状态未知',
       draft: '草稿窗口'
     }
-    const ACTIVATION_LABEL = {
-      persistent: '常驻'
-    }
-
     function LibraryTab ({ sessionId, data, refresh, setError, setToast }) {
       const [sub, setSub] = useState('sections')
       const [list, setList] = useState(null)
@@ -2618,11 +2570,9 @@ window.__ModuleLoader__.load({
       const [newKey, setNewKey] = useState('custom:note')
       const [newLabel, setNewLabel] = useState('')
       const [newText, setNewText] = useState('')
-      const [newActivation, setNewActivation] = useState('persistent')
       const [inserting, setInserting] = useState(null)
       const [insertName, setInsertName] = useState('')
       const [insertAnchor, setInsertAnchor] = useState('__end__')
-      const [insertActivation, setInsertActivation] = useState('persistent')
       const [editingText, setEditingText] = useState(null)
       const [editText, setEditText] = useState('')
 
@@ -2699,7 +2649,6 @@ window.__ModuleLoader__.load({
             sessionId,
             key: newKey,
             label: newLabel,
-            activation: newActivation,
             text: newText
           })
           if (value) refresh(value)
@@ -2707,17 +2656,6 @@ window.__ModuleLoader__.load({
           setCreating(false)
           setNewText('')
           setNewLabel('')
-          setNewActivation('persistent')
-          await load()
-        } catch (error) {
-          setError(String(error.message || error))
-        }
-      }
-
-      const setActivation = async (fragment, activation) => {
-        try {
-          const value = await call('sectionText.update', { sessionId, id: fragment.id, activation })
-          if (value) refresh(value)
           await load()
         } catch (error) {
           setError(String(error.message || error))
@@ -2728,7 +2666,6 @@ window.__ModuleLoader__.load({
         setInserting(fragment.id)
         setInsertName(fragment.key)
         setInsertAnchor('__end__')
-        setInsertActivation(fragment.activation === 'persistent' ? 'persistent' : fragment.activation)
       }
 
       const confirmInsert = async (fragment) => {
@@ -2737,8 +2674,7 @@ window.__ModuleLoader__.load({
             sessionId,
             id: fragment.id,
             name: insertName,
-            anchor: insertAnchor,
-            activation: insertActivation
+            anchor: insertAnchor
           })
           if (value) refresh(value)
           if (typeof setToast === 'function') {
@@ -2793,9 +2729,6 @@ window.__ModuleLoader__.load({
           h('div', { style: css.cardHead },
             h('span', { style: css.name, title: fragment.key }, fragment.label || '默认'),
             badge(fragment.mode === 'empty' ? '置空' : '替换'),
-            fragment.target === 'insert'
-              ? badge(ACTIVATION_LABEL[fragment.activation] ?? ACTIVATION_LABEL.persistent, PALETTE.warn)
-              : null,
             fragment.readOnly ? badge('只读', PALETTE.faint) : null,
             fragment.blocked === true
               ? badge('不生效', PALETTE.faint)
@@ -2821,14 +2754,6 @@ window.__ModuleLoader__.load({
                 style: { ...css.button, ...css.tiny, ...css.primary },
                 onClick: () => startInsert(fragment)
               }, '插入到当前会话')
-              : null,
-            fragment.target === 'insert'
-              ? h('select', {
-                style: { ...css.input, width: 'auto', padding: '3px 6px', fontSize: '11.5px' },
-                value: fragment.activation,
-                onChange: (event) => void setActivation(fragment, event.target.value)
-              },
-              h('option', { value: 'persistent' }, '默认：常驻'))
               : null,
             fragment.readOnly
               ? null
@@ -2858,12 +2783,6 @@ window.__ModuleLoader__.load({
               h('option', { value: '__start__' }, '最前面'),
               h('option', { value: '__end__' }, '最后面'),
               (data.prompt.officialNames ?? []).map((name) => h('option', { key: name, value: name }, `在 ${name} 之后`))),
-              h('select', {
-                style: { ...css.input, marginBottom: '4px' },
-                value: insertActivation,
-                onChange: (event) => setInsertActivation(event.target.value)
-              },
-              h('option', { value: 'persistent' }, '常驻')),
               h('div', { style: { display: 'flex', gap: '6px' } },
                 h('button', { style: { ...css.button, ...css.tiny, ...css.primary }, onClick: () => void confirmInsert(fragment) }, '插入'),
                 h('button', { style: { ...css.button, ...css.tiny }, onClick: () => setInserting(null) }, '取消')))
@@ -3079,12 +2998,6 @@ window.__ModuleLoader__.load({
               placeholder: '名称（可留空自动命名）',
               onChange: (event) => setNewLabel(event.target.value)
             }),
-            h('select', {
-              style: { ...css.input, marginBottom: '6px' },
-              value: newActivation,
-              onChange: (event) => setNewActivation(event.target.value)
-            },
-            h('option', { value: 'persistent' }, '默认：常驻')),
             h('textarea', {
               style: { ...css.textarea, minHeight: '100px' },
               value: newText,
@@ -3898,10 +3811,9 @@ window.__ModuleLoader__.load({
         const onSent = (event) => {
           if (event?.detail?.sessionId !== sessionId) return
           void load()
-          // The plugin marks a one-shot transient consumed on the next
-          // `step/start`, after the composer has already left "sending".
-          // Refresh a few times so the "已使用" badge appears without a manual
-          // refresh.
+          // After the first send the Host locks the session and the prompt
+          // snapshot changes; refresh a few times so the locked state appears
+          // without a manual refresh.
           for (const delay of [600, 1500, 3000, 5000]) {
             timers.push(setTimeout(() => { void load() }, delay))
           }

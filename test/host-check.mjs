@@ -620,7 +620,7 @@ async function main () {
   assert.equal(migrated.fragments[0].label, '默认')
   assert.equal(migrated.fragments[0].createdAt, 123)
   assert.equal(migrated.fragments[0].target, 'override')
-  assert.equal(migrated.fragments[0].activation, 'persistent')
+  assert.equal('activation' in migrated.fragments[0], false)
 
   const multi = {
     version: 2,
@@ -705,7 +705,6 @@ async function main () {
       name: 'ro',
       fragmentIds: ['ro_tool', 'ok_identity'],
       extras: [],
-      transientSections: [],
       toolPolicy: { allow: null, deny: [] },
       updatedAt: Date.now()
     }]
