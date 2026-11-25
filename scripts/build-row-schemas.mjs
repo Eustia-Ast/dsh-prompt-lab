@@ -26,7 +26,11 @@ const option = (name, fallback) => {
   return index >= 0 && args[index + 1] !== undefined ? args[index + 1] : fallback
 }
 
-const DSH = option('--dsh', 'F:/DSH/resources/app.asar/dsh')
+const DSH = option('--dsh', process.env.DSH_APP_ASAR ?? '')
+if (DSH === '') {
+  console.error('DSH app path required: pass --dsh <app.asar/dsh> or set DSH_APP_ASAR')
+  process.exit(1)
+}
 const OUT = option('--out', path.join(import.meta.dirname, '..', 'lib', 'row-schemas.json'))
 const PRESETS = ['standard', 'ptc', 'cordis', 'minimal']
 
@@ -34,7 +38,7 @@ function loadYaml () {
   const candidates = [
     option('--js-yaml', ''),
     path.join(import.meta.dirname, '..', 'node_modules', 'js-yaml'),
-    'C:/Users/sky/.dsh/profiles/desktop/node_modules/js-yaml'
+    process.env.DSH_PROFILE_NODE_MODULES ?? ''
   ].filter(Boolean)
   for (const candidate of candidates) {
     try {
@@ -334,7 +338,7 @@ for (const preset of presets) {
 const output = {
   generatedAt: new Date().toISOString(),
   dsh: dshMeta.version ?? null,
-  source: { installation: DSH, presets: PRESETS },
+  source: { installation: 'app.asar/dsh', presets: PRESETS },
   rows,
   templates
 }
