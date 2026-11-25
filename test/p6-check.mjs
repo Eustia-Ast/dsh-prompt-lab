@@ -90,7 +90,7 @@ legacyStore.ensure()
 const migrated = legacyStore.library()
 assert.equal(migrated.version, 3)
 assert.equal(migrated.fragments[0].target, 'override')
-assert.equal(migrated.fragments[0].activation, 'persistent')
+assert.equal('activation' in migrated.fragments[0], false)
 
 // ------------------------------------------------------------- main fixture
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plab-p6-'))
@@ -150,19 +150,6 @@ store.saveState(sid, {
   extras: [
     { id: 'extra_legacy', name: 'custom:legacy', anchor: '__end__', order: 10, text: 'legacy extra' }
   ],
-  transientSections: [
-    {
-      id: 'transient_legacy',
-      name: 'custom:legacy-once',
-      anchor: '__end__',
-      order: 20,
-      text: 'legacy once',
-      activation: 'once',
-      enabled: true,
-      consumedAtTurn: null,
-      updatedAt: 1
-    }
-  ],
   autoAssistant: { enabled: true, text: 'legacy prefill' }
 })
 const migration = store.migrateInlineSections()
@@ -172,9 +159,6 @@ const legacyEntry = store.library().fragments.find((fragment) => fragment.key ==
 assert.ok(legacyEntry)
 assert.equal(legacyEntry.target, 'insert')
 assert.equal(afterMigration.extras[0].textId, legacyEntry.id)
-const onceEntry = store.library().fragments.find((fragment) => fragment.key === 'custom:legacy-once')
-assert.equal(onceEntry.activation, 'once')
-assert.equal(afterMigration.transientSections[0].textId, onceEntry.id)
 const legacyMessage = store.messageLibrary().entries.find((entry) => entry.text === 'legacy prefill')
 assert.ok(legacyMessage)
 assert.equal(afterMigration.autoAssistant.textId, legacyMessage.id)
@@ -222,11 +206,10 @@ const created = await api.handle({
   sessionId: sid,
   key: 'custom:reusable',
   label: '可复用段',
-  activation: 'once',
   text: 'reusable text'
 })
 const reusable = created.text.entry
-assert.equal(reusable.activation, 'persistent')
+assert.equal('activation' in reusable, false)
 const fetchedReusable = await api.handle({ op: 'sectionText.get', id: reusable.id })
 assert.equal(fetchedReusable.text, 'reusable text')
 await api.handle({ op: 'sectionText.update', sessionId: sid, id: reusable.id, text: 'reusable text v2' })
@@ -239,8 +222,8 @@ const inserted = await api.handle({
 })
 assert.equal(inserted.insert.kind, 'extra')
 state = store.state(sid)
-const insertedTransient = state.extras.find((entry) => entry.name === 'custom:reusable')
-assert.equal(insertedTransient.textId, reusable.id)
+const insertedExtra = state.extras.find((entry) => entry.name === 'custom:reusable')
+assert.equal(insertedExtra.textId, reusable.id)
 
 described = engine.describe(sid)
 assert.equal(described.sections.find((row) => row.name === 'custom:reusable').text, 'reusable text v2')
@@ -249,11 +232,11 @@ assert.equal(described.sections.find((row) => row.name === 'custom:reusable').te
 const listed = await api.handle({ op: 'library.list', sessionId: sid })
 const listedEntry = listed.fragments.find((fragment) => fragment.id === reusable.id)
 assert.equal(listedEntry.target, 'insert')
-assert.equal(listedEntry.activation, 'persistent')
+assert.equal('activation' in listedEntry, false)
 assert.equal(listedEntry.usage.sessions.some((entry) => entry.id === sid), true)
 
 // Removing the session reference keeps the library entry.
-await api.handle({ op: 'extra.delete', sessionId: sid, id: insertedTransient.id })
+await api.handle({ op: 'extra.delete', sessionId: sid, id: insertedExtra.id })
 assert.ok(store.library().fragments.some((fragment) => fragment.id === reusable.id))
 
 // Re-insert and delete through the library with cascade; the session section
@@ -299,8 +282,7 @@ const draftCreated = await api.handle({
   op: 'sectionText.create',
   sessionId: draftSid,
   key: 'custom:draft-text',
-  text: 'draft text',
-  activation: 'once'
+  text: 'draft text'
 })
 const draftEntry = draftCreated.text.entry
 await api.handle({ op: 'sectionText.insert', sessionId: draftSid, id: draftEntry.id })

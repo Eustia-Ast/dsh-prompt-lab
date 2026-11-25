@@ -303,15 +303,7 @@ export function apply (ctx, config = {}) {
       warnSafely(ctx.logger, `prompt-lab: cannot apply tool restriction: ${error?.message ?? error}`)
     }
   }
-  const activeTransientTurns = new Map()
   const lockPending = new Set()
-
-  const transientEntries = () => []
-
-  const markTransientsConsumed = () => {}
-  const finishTransients = () => {}
-  const armTransients = () => {}
-  const onTransientChanged = () => {}
 
   const readInstructions = (sessionId) => {
     const sid = String(sessionId)
@@ -978,13 +970,11 @@ export function apply (ctx, config = {}) {
     instructionsOf: readInstructions,
     appendUserMessage: appendUserMessage,
     appendAssistantMessage: appendAssistantMessage,
-    onTransientChanged,
     prefillSend,
     pendingStatus,
     pendingUnlock,
     onToolPolicyChanged: (sessionId) => {
       applyToolPolicy(sessionId)
-      if (store.isEnabledFor(sessionId) !== true) finishTransients(sessionId, agentOf(sessionId), false)
     },
     settings: () => settings,
     saveSettings: (patch) => {
@@ -1013,7 +1003,6 @@ export function apply (ctx, config = {}) {
       // plugin, not in the wiped Store. Without this, tools stay denied after a
       // "reset everything" until the next Host restart.
       disposeAllToolRestrictions()
-      activeTransientTurns.clear()
       pendingContinuations.clear()
       for (const key of Object.keys(settings)) delete settings[key]
       Object.assign(settings, DEFAULT_CONFIG)
@@ -1067,9 +1056,6 @@ export function apply (ctx, config = {}) {
    * never block the step: the commit runs first (draft overrides are already
    * live in the prompt registry) and `next()` is always called.
    */
-  // Transients must be registered before the loop assembles the prompt for a
-  // turn. `agent/pre-step` is too late: preStep() assembles first and only then
-  // dispatches the waterfall. `turn/start` is the last event before assembly.
   ctx.on('session/event', (session, event) => {
     const sessionId = session?.id
     if (typeof sessionId !== 'string') return
@@ -1193,7 +1179,6 @@ export function apply (ctx, config = {}) {
       for (const timer of scheduledTimers) clearTimeout(timer)
       scheduledTimers.clear()
       disposeAllToolRestrictions()
-      activeTransientTurns.clear()
       pendingContinuations.clear()
       engine.shutdown()
     }, 'prompt-lab: section and tool registrations')
