@@ -1,6 +1,39 @@
 # 更新日志
 
-## ## 1.1.0 — 2026-11-20
+## 1.2.0 — 2026-11-26
+
+### 新增
+
+- Agent 预设：面板头部入口（位于「文本管理」左侧），可新建、编辑、停用、删除本机预设；复制官方预设时按原生行结构勾选，非官方行保留原配置；行配置表由 `lib/row-schemas.json` 生成；提示词正文上限 50,000 字。
+- 首轮配置快照 v2（`locked.json`）：保存全部装配段与 `officialHash`/`renderedHash`/`sectionSetHash`；官方段只存 hash，不存正文。
+- 逐段漂移让位：首轮后转为只读的会话在 Agent 重新采样时比较官方 hash，被覆盖的段官方文本变化后让位，改用新官方文本；纯官方段只标记。
+- 工具段与动态段可在首轮前编辑：工具段禁止置空、保存需两次确认；动态段单次确认。
+- 基线采样记录 `contextComplete`：优先使用完整 step 上下文（modelSelection + toolSet），仅在不完整时标记，不阻塞。
+
+### 变更
+
+- 移除 once/临时段残留：删除 `transientSections`/`activation` 数据模型、API、引擎与 UI；旧数据读取时丢弃；`PRESET_VERSION` 3 → 4。
+- 顺序校准不再缓存猜测值：只有观测到 `before === index` 的段才会计入 verified；失败/超时不再写入缓存。
+- 移除「收起只读片段详情」；移除启动时的 `sanitizeReadOnly` 清理。
+- 本地 API 的错误返回改为 4xx/5xx（校验/业务错误 400，handler 内部错误 500），不再统一返回 200。
+- 工具开关的隐藏与限制使用同一集合：只处理 global 工具，scoped 工具不再出现"说明被隐藏但工具仍可调用"。
+- 工具限制按 Agent 身份释放，旧 Agent 延迟销毁不会撤销新 Agent 的限制。
+- `engines.node` 改为 `>=24.9.0`，与 DSH 的 `@deepseek-ai/dsh` 一致。
+
+### 数据
+
+- `locked.json` v1 读取时升级到 v2；旧会话首次检测会补全官方段，不会把升级误判为漂移。
+- 旧预设（v3）兼容读取；旧 `transientSections`/`activation` 字段丢弃（不可逆）。
+
+### 测试
+
+- 共 16 个测试文件；新增 `test/calibration-check.mjs`、`test/drift-check.mjs`、`test/client-render-check.mjs`（27 项 client 渲染断言）。
+
+### 兼容性
+
+- 支持 DSH `0.2.2-rc.2` 到 `0.2.2-rc.5`；Node.js `>=24.9.0`。
+
+## 1.1.0 — 2026-11-20
 
 ### 变更
 

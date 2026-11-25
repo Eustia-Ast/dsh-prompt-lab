@@ -1,7 +1,7 @@
 {
   "name": "dsh-prompt-lab",
-  "version": "1.1.0",
-  "description": "Per-session system-prompt section editor and local Agent preset registry for DeepSeek Harness, with templates, presets, backups, drafts, message appends and tool switches; its JSON API is loopback-only and guarded by DSH connection access checks.",
+  "version": "1.2.0",
+  "description": "Per-session system-prompt section editor and local Agent preset registry for DeepSeek Harness, with templates, presets, backups, drafts, message appends and tool switches; its JSON API is loopback-only and guarded by DSH connection access checks, and the session config becomes read-only after the first turn so stale overrides yield when DSH changes official text.",
   "license": "MIT",
   "author": "DSH Prompt Lab contributors",
   "type": "module",
@@ -27,7 +27,7 @@
     "access": "public"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0",
+    "node": ">=24.9.0",
     "dsh": ">=0.2.2-rc.2 <0.2.2-rc.6"
   },
   "exports": {

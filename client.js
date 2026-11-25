@@ -512,12 +512,9 @@ window.__ModuleLoader__.load({
       return row.sensitivity ? TIER[row.sensitivity] : null
     }
 
-    /** Tool/capability protocol sections are read-only; future tool switches own them. */
+    /** The Host decides editability; the panel only mirrors `row.readOnly`. */
     function isReadOnlyRow (row) {
-      if (row?.readOnly === true) return true
-      const value = String(row?.name ?? '')
-      return /^tool:/.test(value) || /^tools:/.test(value) ||
-        value === 'mcp-resource-servers' || value === 'structured-output'
+      return row?.readOnly === true
     }
 
     /** Same rule as the Host's estimateTokens; keeps the editor and saved rows in sync. */
@@ -632,13 +629,6 @@ window.__ModuleLoader__.load({
       const [newName, setNewName] = useState('custom:note')
       const [newAnchor, setNewAnchor] = useState('__end__')
       const [newText, setNewText] = useState('')
-      const [collapseReadOnly, setCollapseReadOnly] = useState(() => {
-        try {
-          return window.localStorage.getItem('prompt-lab:collapse-readonly') === '1'
-        } catch {
-          return false
-        }
-      })
       const [instructions, setInstructions] = useState(null)
 
       useEffect(() => {
@@ -670,6 +660,10 @@ window.__ModuleLoader__.load({
 
       const rows = data.prompt.sections
       const locked = data.session.locked === true
+      // A locked session compares the snapshot with the live assembly: changed
+      // official text and yielded overrides arrive as row.drift / row.yielded.
+      const driftedRows = rows.filter((row) =>
+        row.drift === 'changed' || row.drift === 'removed' || row.drift === 'added')
       // Count what is actually assembled, not what is saved: a suspended
       // override contributes its official text, and a suppressed tool section
       // is empty.
@@ -716,7 +710,7 @@ window.__ModuleLoader__.load({
         majorMinor(release.version) !== majorMinor(release.classifiedAgainst)
 
       const open = (row) => {
-        const canEmpty = row.status !== 'extra'
+        const canEmpty = row.status !== 'extra' && !row.name.startsWith('tool:')
         setEditing(row.name)
         setMode(canEmpty && row.mode === 'empty' ? 'empty' : 'replace')
         setValue(canEmpty && row.mode === 'empty' ? '' : row.text)
@@ -725,7 +719,36 @@ window.__ModuleLoader__.load({
         setSaveAsName(row.fragmentLabel ? `${row.fragmentLabel} 副本` : '新模板')
       }
 
+      // A save that does not change the section (same mode, same text) must not
+      // pop the confirmation: the panel re-opens the editor with the current
+      // value, so a plain "open then save" is a no-op.
+      const sectionContentChanged = (row) => {
+        const currentMode = row.mode === 'empty' ? 'empty' : 'replace'
+        if (mode !== currentMode) return true
+        if (mode === 'empty') return false
+        return value !== (typeof row.text === 'string' ? row.text : '')
+      }
+
+      // Tool and dynamic sections can be edited before the first turn, but the
+      // text is what the model reads: ask explicitly. Only the browser panel
+      // asks; the API stays usable for automation.
+      const confirmSectionSave = (row) => {
+        if (!sectionContentChanged(row)) return true
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true
+        if (row.name.startsWith('tool:')) {
+          if (!window.confirm('你正在修改工具说明。\n实际工具 schema 不会改变，模型可能因此误用工具。')) return false
+          return window.confirm(`确认替换 ${row.name} 的说明？\n我理解实际工具定义仍由 DSH 控制。`)
+        }
+        if (/^(plan:|team:|tools:|computer-use:)/.test(row.name) ||
+            row.name === 'mcp-resource-servers' ||
+            row.name === 'structured-output') {
+          return window.confirm('这一段由 DSH 按当前能力或模式实时生成；修改只影响模型看到的说明，不改变实际能力。继续？')
+        }
+        return true
+      }
+
       const save = async (row) => {
+        if (!confirmSectionSave(row)) return
         setBusy(true)
         try {
           // User-added sections live in state.extras, not in the fragment
@@ -819,7 +842,7 @@ window.__ModuleLoader__.load({
       }
 
       const renderEditor = (row) => {
-        const canEmpty = row.status !== 'extra'
+        const canEmpty = row.status !== 'extra' && !row.name.startsWith('tool:')
         return h('div', { style: css.editor },
         h('div', { style: { ...css.hint, marginBottom: '6px' } },
           `正在编辑 `, h('code', { style: { fontFamily: PALETTE.mono } }, row.name),
@@ -832,7 +855,7 @@ window.__ModuleLoader__.load({
             h('input', { type: 'radio', checked: mode === 'replace', onChange: () => setMode('replace') }), '替换'),
           h('label', {
             style: { ...css.hint, display: 'flex', alignItems: 'center', gap: '5px', opacity: canEmpty ? 1 : 0.5 },
-            title: canEmpty ? '' : '新增段不能置空，请直接删除'
+            title: canEmpty ? '' : '新增段或工具段不能置空'
           },
             h('input', {
               type: 'radio',
@@ -1094,26 +1117,12 @@ window.__ModuleLoader__.load({
 
         h('div', { style: { display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' } },
           locked
-            ? h('span', { style: css.hint }, '首轮已开始，提示词页只读；新建会话后可继续配置。')
+            ? h('span', { style: driftedRows.length > 0 ? { ...css.hint, color: PALETTE.warn } : css.hint },
+              driftedRows.length > 0
+                ? `首轮已开始，提示词页只读；本会话有 ${driftedRows.length} 段官方文本已变化，变化的覆盖已让位。`
+                : '首轮已开始，提示词页只读；新建会话后可继续配置。')
             : h('button', { style: { ...css.button, ...css.primary }, onClick: () => setAdding((v) => !v) }, adding ? '收起' : '＋ 新增段'),
-          h('label', {
-            style: { ...css.hint, marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }
-          },
-          h('input', {
-            type: 'checkbox',
-            checked: collapseReadOnly,
-            onChange: (event) => {
-              const next = event.target.checked
-              setCollapseReadOnly(next)
-              if (next) setViewing(null)
-              try {
-                window.localStorage.setItem('prompt-lab:collapse-readonly', next ? '1' : '0')
-              } catch {
-                /* preference only */
-              }
-            }
-          }),
-          '收起只读片段详情')),
+        ),
 
         adding && !locked
           ? h('div', { style: { ...css.card, padding: '10px' } },
@@ -1143,12 +1152,15 @@ window.__ModuleLoader__.load({
               h('button', { style: css.button, onClick: () => setAdding(false) }, '取消')))
           : null,
 
+        locked && data.prompt.captured === true && data.prompt.contextComplete === false
+          ? h('div', { style: css.warnNotice }, '本会话的官方基线是在缺少完整 step 上下文时采样的（工具集/模型选择未知），漂移检测可能把简化文本当成官方变化。')
+          : null,
+
         rows.length === 0 ? h('div', { style: css.hint }, '没有可显示的段。') : null,
 
         rows.map((row) => {
           const templates = templatesByKey.get(row.name) ?? []
           const readOnly = isReadOnlyRow(row)
-          const collapsed = collapseReadOnly && readOnly
           return h('div', { key: row.name, style: css.card },
           h('div', { style: css.cardHead },
             h('span', { style: css.name, title: row.name }, row.name),
@@ -1158,17 +1170,26 @@ window.__ModuleLoader__.load({
               ? null
               : badge(STATUS[row.status]?.label || row.status, STATUS[row.status]?.color),
             readOnly ? badge('只读', PALETTE.faint) : null,
+            row.drift === 'changed' ? badge('挂起', PALETTE.warn) : null,
+            row.drift === 'removed' ? badge('失效', PALETTE.danger) : null,
+            row.drift === 'added' ? badge('新增', PALETTE.accent) : null,
+            row.yielded ? badge('已让位', PALETTE.danger) : null,
             row.textId ? badge(`文本库${row.textLabel ? `：${row.textLabel}` : ''}`, PALETTE.accent) : null,
             row.toolSuppressed ? badge('工具已关', PALETTE.warn) : null,
             completeActive ? badge('不生效', PALETTE.faint) : null,
             h('span', { style: { ...css.hint, marginLeft: 'auto' } }, tok(row.tokens))),
-          collapsed
-            ? null
-            : h('div', { style: css.desc },
+          h('div', { style: css.desc },
               describeSection(row.name),
-              readOnly ? '　工具调用由工具开关控制。' : '',
+              readOnly ? '　该段由 DSH 按实时能力生成或控制，不能编辑。' : '',
               row.toolSuppressed ? '　当前工具开关已关闭此工具说明；关闭「对本会话生效」会恢复。' : '',
               row.status === 'suspended' ? '　官方原文已变化，你的版本暂未生效。' : '',
+              row.drift === 'changed'
+                ? (row.yielded
+                  ? '　官方文本已变化；这段覆盖已让位，本轮起使用官方文本。恢复需要新建会话。'
+                  : '　官方文本已变化；本段没有覆盖，仅作标记。')
+                : '',
+              row.drift === 'removed' ? '　官方已没有这一段；配置保留但不再生效。' : '',
+              row.drift === 'added' ? '　这是官方新增的段。' : '',
               row.status === 'pending' ? '　尚未采样到官方基线，首次对话后重新校验。' : '',
               row.status === 'active' && row.applied === false && !completeActive ? '　注册未生效（可能被同一 agent 作用域的其他插件占用了同名段）。' : '',
               row.status === 'orphan' ? '　官方已没有这一段，可以转成新增段继续用。' : '',
@@ -1177,7 +1198,7 @@ window.__ModuleLoader__.load({
                 : '',
               row.source === 'plugin' && row.sensitivity === null ? '　内容由插件提供，未审核；风险无法从段名判断，改动前请先看原文。' : '',
               completeActive ? '　本会话使用完整提示词，分段编辑不生效。' : ''),
-          !locked && !collapsed && !readOnly && row.status !== 'extra' && templates.length > 0
+          !locked && !readOnly && row.status !== 'extra' && templates.length > 0
             ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '0 10px 8px', flexWrap: 'wrap' } },
               h('span', { style: css.hint }, '模板'),
               h('select', {
@@ -1189,12 +1210,12 @@ window.__ModuleLoader__.load({
               templates.map((template) => h('option', { key: template.id, value: template.id },
                 `${template.label || '默认'} · ${template.mode === 'empty' ? '置空' : '替换'} · ~${template.tokens} tok`))))
             : null,
-          collapsed ? null : h('div', { style: { display: 'flex', gap: '6px', padding: '0 10px 10px', flexWrap: 'wrap' } },
+          h('div', { style: { display: 'flex', gap: '6px', padding: '0 10px 10px', flexWrap: 'wrap' } },
             readOnly || locked
               ? h('button', {
                 style: { ...css.button, ...css.tiny },
                 onClick: () => setViewing(viewing === row.name ? null : row.name)
-              }, viewing === row.name ? '收起正文' : '查看正文')
+              }, viewing === row.name ? '收起正文' : (locked ? '当前正文' : '查看正文'))
               : h('button', { style: { ...css.button, ...css.tiny }, onClick: () => (editing === row.name ? setEditing(null) : open(row)) },
                 editing === row.name ? '收起' : (row.status === 'official' ? '改写' : '编辑')),
             !locked && (row.status === 'active' || row.status === 'suspended' || row.status === 'pending' || (readOnly && row.status === 'orphan'))

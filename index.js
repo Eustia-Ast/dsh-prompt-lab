@@ -25,7 +25,7 @@ import { classifySessions } from './lib/liveness.js'
 import { copyDataDirs, hasMeaningfulData, hasOwnedData, migratePending, migrationPathError, targetHasUnexpectedContents } from './lib/migrate.js'
 import { ensureWorkspaceWarning } from './lib/workspace-warning.js'
 import { createPendingStore } from './lib/pending.js'
-import { Store, DEFAULT_CONFIG, bootstrapDir, readBootstrapConfig, resolveDataDir, resolveDshHome, writeBootstrapConfig } from './lib/store.js'
+import { Store, DEFAULT_CONFIG, bootstrapDir, readBootstrapConfig, resolveDataDir, resolveDshHome, sha16, writeBootstrapConfig } from './lib/store.js'
 
 function warnSafely (logger, message) {
   try {
@@ -114,11 +114,6 @@ export function apply (ctx, config = {}) {
     return
   }
   try {
-    store.sanitizeReadOnly()
-  } catch (error) {
-    warnSafely(ctx.logger, `prompt-lab: read-only cleanup failed: ${error?.message ?? error}`)
-  }
-  try {
     store.migrateInlineSections()
   } catch (error) {
     warnSafely(ctx.logger, `prompt-lab: section text migration failed: ${error?.message ?? error}`)
@@ -193,10 +188,14 @@ export function apply (ctx, config = {}) {
       return undefined
     }
   }
-  const disposeToolRestriction = (sessionId) => {
-    const entry = toolRestrictions.get(String(sessionId))
+  const disposeToolRestriction = (sessionId, agent) => {
+    const id = String(sessionId)
+    const entry = toolRestrictions.get(id)
     if (entry === undefined) return
-    toolRestrictions.delete(String(sessionId))
+    // A disposed Agent may fire after a replacement already owns the session;
+    // only the owner may clear the restriction.
+    if (agent !== undefined && entry.agent !== undefined && entry.agent !== agent) return
+    toolRestrictions.delete(id)
     try {
       entry.dispose()
     } catch (error) {
@@ -278,27 +277,31 @@ export function apply (ctx, config = {}) {
     const deny = Array.isArray(state.toolPolicy?.deny)
       ? [...new Set(state.toolPolicy.deny.filter((name) => typeof name === 'string' && name !== ''))]
       : []
+    const service = agent === undefined ? undefined : toolServiceOf(agent)
+    // `restrict` only affects global tools. Hiding a scoped tool's section
+    // without restricting it would make the model blind to a tool it can still
+    // call, so suppression and restriction share one set.
+    let applicable = deny
+    if (service !== undefined && typeof service.schemas === 'function') {
+      try {
+        const globalNames = new Set((service.schemas() ?? [])
+          .map((schema) => schema?.name)
+          .filter((name) => typeof name === 'string'))
+        applicable = deny.filter((name) => globalNames.has(name))
+      } catch {
+        applicable = deny
+      }
+    }
     try {
-      engine.setSuppressedSections(id, deny.map((name) => `tool:${name}`))
+      engine.setSuppressedSections(id, applicable.map((name) => `tool:${name}`))
     } catch (error) {
       warnSafely(ctx.logger, `prompt-lab: cannot suppress tool sections: ${error?.message ?? error}`)
     }
-    if (agent === undefined) return
-    const service = toolServiceOf(agent)
-    if (service === undefined || typeof service.restrict !== 'function') return
-    const valid = []
-    for (const name of deny) {
-      try {
-        // `restrict` is global-tool only; skip scoped-only and unknown names.
-        if (service.get(name) !== undefined) valid.push(name)
-      } catch {
-        /* unknown name */
-      }
-    }
-    if (valid.length === 0) return
+    if (agent === undefined || service === undefined || typeof service.restrict !== 'function') return
+    if (applicable.length === 0) return
     try {
-      const dispose = service.restrict({ deny: valid })
-      toolRestrictions.set(id, { dispose, deny: valid })
+      const dispose = service.restrict({ deny: applicable })
+      toolRestrictions.set(id, { dispose, deny: applicable, agent })
     } catch (error) {
       warnSafely(ctx.logger, `prompt-lab: cannot apply tool restriction: ${error?.message ?? error}`)
     }
@@ -868,13 +871,17 @@ export function apply (ctx, config = {}) {
       // Do not freeze a partial state: official overrides need the captured
       // baseline (the agent/created attach path retries this later).
       if (described.captured !== true) return false
-      const sections = (described.sections ?? [])
-        .filter((row) => row && ['active', 'extra', 'pending'].includes(row.status))
-        .map((row) => ({
+      const rows = (described.sections ?? []).filter((row) => row && typeof row.name === 'string')
+      const sections = rows.map((row) => {
+        // Official sections keep only their hash: the live assembly already
+        // holds the current text, and drift detection only needs the hash.
+        const official = row.status === 'official' || row.status === 'blocked'
+        const text = official || typeof row.text !== 'string' ? null : row.text
+        return {
           name: row.name,
           status: row.status,
           mode: row.mode === 'empty' ? 'empty' : 'replace',
-          text: typeof row.text === 'string' ? row.text : '',
+          text,
           textId: typeof row.textId === 'string' ? row.textId : null,
           textLabel: typeof row.textLabel === 'string' ? row.textLabel : null,
           fragmentId: typeof row.fragmentId === 'string' ? row.fragmentId : null,
@@ -883,9 +890,24 @@ export function apply (ctx, config = {}) {
           anchor: typeof row.anchor === 'string' ? row.anchor : null,
           order: Number.isFinite(row.order) ? row.order : null,
           source: row.source ?? null,
-          readOnly: row.readOnly === true
-        }))
-      store.saveLockedSnapshot(id, { lockedAt: Date.now(), firstTurn, source, sections })
+          readOnly: row.readOnly === true,
+          officialHash: typeof row.officialHash === 'string' ? row.officialHash : null,
+          textHash: text === null ? null : sha16(text),
+          yielded: false,
+          drift: null
+        }
+      })
+      const renderedHash = sha16(rows.map((row) => `${row.name}\n${typeof row.text === 'string' ? row.text : ''}`).join('\n'))
+      const sectionSetHash = sha16(rows.map((row) => row.name).join('\n'))
+      store.saveLockedSnapshot(id, {
+        lockedAt: Date.now(),
+        firstTurn,
+        source,
+        renderedHash,
+        sectionSetHash,
+        contextComplete: described.contextComplete === true,
+        sections
+      })
       lockPending.delete(id)
       // Backups cannot be restored after this point.
       store.deleteBackups(id)
@@ -1067,6 +1089,20 @@ export function apply (ctx, config = {}) {
       if (turn === 1 && store.isEnabledFor(sessionId) === true) lockPending.add(sessionId)
       return
     }
+    if (event?.type === 'turn/end') {
+      // Drift is checked once per turn, after the request that may have
+      // changed the official text. The next turn assembles with the yielded
+      // sections already released.
+      if (store.isLocked(sessionId)) {
+        try {
+          engine.detectDrift(sessionId)
+          engine.sync(sessionId)
+        } catch (error) {
+          warnSafely(ctx.logger, `prompt-lab: drift detection failed: ${error?.message ?? error}`)
+        }
+      }
+      return
+    }
     if (event?.type === 'step/start') {
       if (lockPending.has(sessionId)) lockSession(sessionId, 'first-turn')
     }
@@ -1115,7 +1151,7 @@ export function apply (ctx, config = {}) {
   ctx.on('agent/disposed', ({ agent } = {}) => {
     const sessionId = agent?.id
     if (typeof sessionId !== 'string') return
-    disposeToolRestriction(sessionId)
+    disposeToolRestriction(sessionId, agent)
     engine.detach(sessionId, agent)
     // Do not delete on disposal: a blank window may be archived (recoverable)
     // or a new Agent may be created for the same id. GC decides later.

@@ -196,14 +196,20 @@ async function main () {
   assert.equal(sectionSource('acme:plugin-section'), 'plugin')
   assert.equal(sensitivityOf('tool:bash'), 'capability')
   assert.equal(sensitivityOf('computer-use:dsh-cua'), 'capability')
-  assert.equal(isReadOnlySection('tool:bash'), true)
-  assert.equal(isReadOnlySection('computer-use:dsh-cua'), true)
-  assert.equal(isReadOnlySection('tools:sdk'), true)
-  assert.equal(isReadOnlySection('mcp-resource-servers'), true)
+  // No section is read-only before the first turn; a tool section may have its
+  // text replaced but must never be blanked.
+  assert.equal(isReadOnlySection('tool:bash'), false)
+  assert.equal(isReadOnlySection('computer-use:dsh-cua'), false)
+  assert.equal(isReadOnlySection('tools:sdk'), false)
+  assert.equal(isReadOnlySection('mcp-resource-servers'), false)
   assert.equal(isReadOnlySection('plan:policy'), false)
   await assert.rejects(
-    () => strictApi.handle({ op: 'fragment.save', sessionId: sid, key: 'tool:bash', mode: 'replace', text: 'blocked' }),
-    /只读/
+    () => strictApi.handle({ op: 'fragment.save', sessionId: sid, key: 'tool:bash', mode: 'replace', text: '   ' }),
+    /工具段不能置空/
+  )
+  await assert.rejects(
+    () => strictApi.handle({ op: 'fragment.save', sessionId: sid, key: 'tool:bash', mode: 'empty', text: '' }),
+    /工具段不能置空/
   )
 
   // 1. no capture yet, nothing registered, disabled session untouched
@@ -219,7 +225,7 @@ async function main () {
   assert.equal(captured.capture.ok, true)
   assert.equal(captured.prompt.captured, true)
   assert.equal(captured.prompt.sections.length, 5)
-  assert.equal(captured.prompt.sections.find((row) => row.name === 'tool:bash').readOnly, true)
+  assert.equal(captured.prompt.sections.find((row) => row.name === 'tool:bash').readOnly, false)
   assert.equal(captured.prompt.sections.find((row) => row.name === 'plan:policy').readOnly, false)
   assert.deepEqual(captured.prompt.delta, { firstCapture: true, added: [], removed: [], version: '0.2.2-rc.3' })
   assert.equal(captured.meta.release.classifiedAgainst, CLASSIFIED_AGAINST)
@@ -269,9 +275,10 @@ async function main () {
   await api.handle({ op: 'fragment.rebase', sessionId: sid, key: 'tool:bash' })
   assert.equal((await agent.ctx.systemPrompt.assemble({ agent, scope: agent })).sections[2].text, 'never run bash')
 
-  // 8. empty mode removes the section text
-  await api.handle({ op: 'fragment.save', sessionId: sid, key: 'tool:read', mode: 'empty', text: '' })
-  assert.equal((await agent.ctx.systemPrompt.assemble({ agent, scope: agent })).sections[3].text, '')
+  // 8. empty mode removes the section text (plain sections only; a tool
+  //    section may not be blanked)
+  await api.handle({ op: 'fragment.save', sessionId: sid, key: 'acme:plugin-section', mode: 'empty', text: '' })
+  assert.equal((await agent.ctx.systemPrompt.assemble({ agent, scope: agent })).sections[4].text, '')
 
   // 9. anchored extras keep the panel order and the assembled order identical
   await api.handle({ op: 'extra.save', sessionId: sid, name: 'custom:middle', anchor: 'tool:bash', order: 10, text: 'MID' })
@@ -373,6 +380,24 @@ async function main () {
   const calibrated = await calibrateAgent.ctx.systemPrompt.assemble({ agent: calibrateAgent, scope: calibrateAgent })
   assert.deepEqual(calibrated.sections.map((section) => section.name), ['harness:identity', 'tool:bash', 'hidden:unknown'])
   assert.equal(calibrated.sections[2].text, 'calibrated override')
+
+  // 13b. baseline sampling prefers the full step context and reports it
+  const fullSid = 'session-full-context'
+  const fullAgent = createAgent(fullSid, officialSections())
+  fullAgent.model = { current: () => ({ provider: 'deepseek', model: 'chat' }) }
+  let resolveCalls = 0
+  fullAgent.ctx.tools = {
+    resolve: async ({ modelSelection }) => {
+      resolveCalls += 1
+      assert.equal(modelSelection.provider, 'deepseek')
+      return { dispose () {} }
+    }
+  }
+  live.set(fullSid, fullAgent)
+  await api.handle({ op: 'assemble.capture', sessionId: fullSid })
+  const fullState = await api.handle({ op: 'state.get', sessionId: fullSid })
+  assert.equal(fullState.prompt.contextComplete, true)
+  assert.equal(resolveCalls, 1)
 
   // 14. fragment library: usage, orphan, presets, cascade delete
   const secondSid = 'session-test-2'
@@ -561,8 +586,8 @@ async function main () {
   const autoLabels = bashGroup.templates.map((fragment) => fragment.label)
   for (const expected of expectedAutoLabels) assert.ok(autoLabels.includes(expected), `missing ${expected}`)
   assert.equal(new Set(autoLabels).size, autoLabels.length, 'auto labels must be unique inside the group')
-  assert.equal(bashGroup.readOnly, true)
-  assert.equal(bashGroup.templates.every((fragment) => fragment.readOnly === true), true)
+  assert.equal(bashGroup.readOnly, false)
+  assert.equal(bashGroup.templates.every((fragment) => fragment.readOnly === true), false)
 
   // Groups follow the official assembly order, not the key's dictionary order.
   // "deployment:persona-prefix" sorts before "harness:identity" alphabetically,
@@ -717,24 +742,11 @@ async function main () {
   })
   const backupEntry = cleanStore.backup('session-clean-1', 'before cleanup', 'manual')
   const backupPayload = cleanStore.readBackup('session-clean-1', backupEntry.file)
-  assert.equal(backupPayload.session.prompt.overrides['tool:bash'], undefined)
+  // Tool sections are editable now: a backup keeps their override and extras.
+  assert.equal(backupPayload.session.prompt.overrides['tool:bash'], 'ro_tool')
   assert.equal(backupPayload.session.prompt.overrides['harness:identity'], 'ok_identity')
-  assert.equal(backupPayload.session.prompt.extras.length, 0)
-
-  cleanStore.saveDraft('session-clean-1', {
-    state: { enabled: true, overrides: { 'tool:bash': 'ro_tool', 'harness:identity': 'ok_identity' } },
-    fragments: [{ id: 'draft_ro', key: 'tool:bash', label: 'draft tool', mode: 'replace', text: 'draft' }]
-  })
-  const cleaned = cleanStore.sanitizeReadOnly()
-  assert.equal(cleaned.presets, 1)
-  assert.equal(cleaned.sessions, 1)
-  assert.equal(cleaned.drafts, 1)
-  assert.deepEqual(cleanStore.presets().presets[0].fragmentIds, ['ok_identity'])
-  assert.deepEqual(cleanStore.state('session-clean-1').overrides, { 'harness:identity': 'ok_identity' })
-  assert.equal(cleanStore.state('session-clean-1').extras.length, 0)
-  const cleanedDraft = cleanStore.draft('session-clean-1')
-  assert.deepEqual(cleanedDraft.state.overrides, { 'harness:identity': 'ok_identity' })
-  assert.equal(cleanedDraft.fragments.length, 0)
+  assert.equal(backupPayload.session.prompt.extras.length, 1)
+  assert.equal(cleanStore.state('session-clean-1').extras.length, 1)
 
   // PTC-style section providers require the step tool set. A bare probe may
   // throw before the first step; attach retries with the resolved tool set.
