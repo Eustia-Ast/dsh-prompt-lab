@@ -228,7 +228,7 @@ assert.ok(scheduled.migration !== null)
 // normalizes with realpath, so compare resolved paths.
 assert.equal(fs.realpathSync.native(scheduled.migration.from), fs.realpathSync.native(currentDir))
 assert.equal(fs.realpathSync.native(scheduled.migration.to), fs.realpathSync.native(targetDir))
-assert.equal(apiSettings.dataDir, targetDir)
+assert.equal(fs.realpathSync.native(apiSettings.dataDir), fs.realpathSync.native(targetDir))
 assert.equal(
   fs.realpathSync.native(apiSettings.pendingMigration.to),
   fs.realpathSync.native(targetDir)
