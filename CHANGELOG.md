@@ -1,5 +1,17 @@
 # 更新日志
 
+## 1.2.1 — 2026-11-26
+
+### 变更
+
+- 确认弹窗统一为面板自己的 `ConfirmDialog`（跟随深/浅主题）：工具段两次确认、动态段一次确认、解锁会话两次确认都不再使用 `window.confirm`。
+- CI 矩阵扩展为 Linux + Windows，Node 最低版本固定为 `24.9.0`（与 `engines.node` 一致）；Windows 上会真正执行 `path-guard.js` 的 junction 分支。
+- 新增 `MANUAL-SMOKE.md`：发版前在真实 DSH 里逐项验证的清单与记录。
+
+### 文档
+
+- `SECURITY.md` 的维护范围更新为 `1.2.x`。
+
 ## 1.2.0 — 2026-11-26
 
 ### 新增

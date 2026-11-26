@@ -61,4 +61,10 @@ assert.ok(registrations.some((entry) => entry.spec.name === 'conversation.input.
 assert.ok(registrations.some((entry) => entry.spec.name === 'shell.overlay'))
 assert.ok(registrations.every((entry) => typeof entry.component === 'function'))
 
+// Confirmations go through the theme-aware ConfirmDialog, not the browser's
+// window.confirm (which ignores the plugin palette).
+assert.equal(/window\.confirm\s*\(/.test(source), false, 'client.js must not call window.confirm')
+assert.ok(source.includes('sectionConfirm'), 'section saves must use the ConfirmDialog state')
+assert.ok(source.includes('reallyUnlock'), 'pending unlock must use the ConfirmDialog state')
+
 console.log('client smoke checks passed')

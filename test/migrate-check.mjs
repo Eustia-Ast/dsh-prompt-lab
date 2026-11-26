@@ -224,10 +224,15 @@ const api = createApi({
 })
 const scheduled = await api.handle({ op: 'config.set', dataDir: targetDir })
 assert.ok(scheduled.migration !== null)
-assert.equal(scheduled.migration.from, currentDir)
-assert.equal(scheduled.migration.to, targetDir)
+// os.tmpdir() can be an 8.3 short path on Windows CI (RUNNER~1); the store
+// normalizes with realpath, so compare resolved paths.
+assert.equal(fs.realpathSync.native(scheduled.migration.from), fs.realpathSync.native(currentDir))
+assert.equal(fs.realpathSync.native(scheduled.migration.to), fs.realpathSync.native(targetDir))
 assert.equal(apiSettings.dataDir, targetDir)
-assert.equal(apiSettings.pendingMigration.to, targetDir)
+assert.equal(
+  fs.realpathSync.native(apiSettings.pendingMigration.to),
+  fs.realpathSync.native(targetDir)
+)
 assert.equal(fs.existsSync(path.join(targetDir, 'library')), false)
 await assert.rejects(
   () => api.handle({ op: 'config.set', dataDir: badTarget }),

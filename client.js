@@ -624,6 +624,7 @@ window.__ModuleLoader__.load({
       const [driftOpen, setDriftOpen] = useState(false)
       const [showBlocked, setShowBlocked] = useState(false)
       const [saveAsOpen, setSaveAsOpen] = useState(false)
+      const [sectionConfirm, setSectionConfirm] = useState(null)
       const [saveAsName, setSaveAsName] = useState('')
       const [viewing, setViewing] = useState(null)
       const [newName, setNewName] = useState('custom:note')
@@ -730,25 +731,27 @@ window.__ModuleLoader__.load({
       }
 
       // Tool and dynamic sections can be edited before the first turn, but the
-      // text is what the model reads: ask explicitly. Only the browser panel
-      // asks; the API stays usable for automation.
-      const confirmSectionSave = (row) => {
-        if (!sectionContentChanged(row)) return true
-        if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true
+      // text is what the model reads: ask explicitly through the same
+      // DSH-style dialog the rest of the panel uses (window.confirm ignores the
+      // plugin theme). Only the browser panel asks; the API stays usable for
+      // automation.
+      const confirmStepsOf = (row) => {
+        if (!sectionContentChanged(row)) return []
         if (row.name.startsWith('tool:')) {
-          if (!window.confirm('你正在修改工具说明。\n实际工具 schema 不会改变，模型可能因此误用工具。')) return false
-          return window.confirm(`确认替换 ${row.name} 的说明？\n我理解实际工具定义仍由 DSH 控制。`)
+          return [
+            '你正在修改工具说明。\n实际工具 schema 不会改变，模型可能因此误用工具。',
+            `确认替换 ${row.name} 的说明？\n我理解实际工具定义仍由 DSH 控制。`
+          ]
         }
         if (/^(plan:|team:|tools:|computer-use:)/.test(row.name) ||
             row.name === 'mcp-resource-servers' ||
             row.name === 'structured-output') {
-          return window.confirm('这一段由 DSH 按当前能力或模式实时生成；修改只影响模型看到的说明，不改变实际能力。继续？')
+          return ['这一段由 DSH 按当前能力或模式实时生成；修改只影响模型看到的说明，不改变实际能力。']
         }
-        return true
+        return []
       }
 
-      const save = async (row) => {
-        if (!confirmSectionSave(row)) return
+      const performSave = async (row) => {
         setBusy(true)
         try {
           // User-added sections live in state.extras, not in the fragment
@@ -785,6 +788,17 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
+      }
+
+      const save = async (row) => {
+        if (sectionContentChanged(row)) {
+          const steps = confirmStepsOf(row)
+          if (steps.length > 0) {
+            setSectionConfirm({ row, steps, index: 0 })
+            return
+          }
+        }
+        await performSave(row)
       }
 
       const switchTemplate = async (row, fragmentId) => {
@@ -1150,6 +1164,24 @@ window.__ModuleLoader__.load({
                   }))
               }, '保存'),
               h('button', { style: css.button, onClick: () => setAdding(false) }, '取消')))
+          : null,
+
+        sectionConfirm !== null
+          ? h(ConfirmDialog, {
+            title: '确认修改提示词段',
+            message: sectionConfirm.steps[sectionConfirm.index],
+            confirmLabel: sectionConfirm.index < sectionConfirm.steps.length - 1 ? '继续' : '确认保存',
+            onConfirm: () => {
+              if (sectionConfirm.index < sectionConfirm.steps.length - 1) {
+                setSectionConfirm({ ...sectionConfirm, index: sectionConfirm.index + 1 })
+                return
+              }
+              const row = sectionConfirm.row
+              setSectionConfirm(null)
+              void performSave(row)
+            },
+            onCancel: () => setSectionConfirm(null)
+          })
           : null,
 
         locked && data.prompt.captured === true && data.prompt.contextComplete === false
@@ -3376,6 +3408,7 @@ window.__ModuleLoader__.load({
       const sessionId = props?.sessionId
       const [pending, setPending] = useState(null)
       const [busy, setBusy] = useState(false)
+      const [confirmStage, setConfirmStage] = useState(null)
       const refresh = useCallback(async () => {
         if (!sessionId) return
         try {
@@ -3411,12 +3444,12 @@ window.__ModuleLoader__.load({
       }, [locked])
 
       if (!locked) return null
-      const unlock = async () => {
+      const unlock = () => {
         if (busy) return
-        const first = window.confirm('解锁后未重启就发送消息，可能使本会话的 turn 编号不一致并损坏日志。确定解锁？')
-        if (!first) return
-        const second = window.confirm('再次确认：即使解锁，也强烈建议立即通过任务栏完全重启 DSH。仍要解锁？')
-        if (!second) return
+        setConfirmStage(0)
+      }
+
+      const reallyUnlock = async () => {
         setBusy(true)
         try {
           setPending(await call('pending.unlock', { sessionId }))
@@ -3449,7 +3482,26 @@ window.__ModuleLoader__.load({
           '预填充/assistant 注入已写入。若未通过任务栏完全重启 DSH 就继续发送，turn 编号可能不一致。',
           h('div', { style: { marginTop: '4px' } }, `状态：${pending.status ?? 'unknown'}；类型：${pending.kind ?? 'unknown'}`)),
         h('div', { style: { display: 'flex', gap: '6px', marginTop: '10px' } },
-          h('button', { style: { ...css.button, ...css.danger }, disabled: busy, onClick: unlock }, busy ? '解锁中…' : '解锁（需二次确认）'))))
+          h('button', { style: { ...css.button, ...css.danger }, disabled: busy, onClick: unlock }, busy ? '解锁中…' : '解锁（需二次确认）'))),
+      confirmStage !== null
+        ? h(ConfirmDialog, {
+          title: '解锁本会话',
+          message: confirmStage === 0
+            ? '解锁后未重启就发送消息，可能使本会话的 turn 编号不一致并损坏日志。确定解锁？'
+            : '再次确认：即使解锁，也强烈建议立即通过任务栏完全重启 DSH。仍要解锁？',
+          confirmLabel: confirmStage === 0 ? '继续' : '确认解锁',
+          danger: true,
+          onConfirm: () => {
+            if (confirmStage === 0) {
+              setConfirmStage(1)
+              return
+            }
+            setConfirmStage(null)
+            void reallyUnlock()
+          },
+          onCancel: () => setConfirmStage(null)
+        })
+        : null)
       return typeof document !== 'undefined' && ReactDOM?.createPortal
         ? ReactDOM.createPortal(content, document.body)
         : content
